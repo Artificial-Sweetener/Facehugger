@@ -82,9 +82,8 @@ def run_proof(
         fallback = RepoTreeMetadataSource(api)
         comparison_ids = corpus[:STRATEGY_COMPARISON_REPO_CAP]
         for repo_id in comparison_ids:
-            _compare_strategies(primary, fallback, repo_id, metrics, rate_controller)
+            _compare_strategies(primary, fallback, repo_id, metrics)
         for repo_id in corpus:
-            rate_controller.wait()
             try:
                 inspected, measurement = primary.inspect_repo(repo_id, None)
             except Exception:
@@ -134,7 +133,6 @@ def _catalog(
         expand=["sha", "siblings", "lastModified", "private", "gated", "downloads"],
     )
     for info in models:
-        rate_controller.wait()
         if catalog_limit is not None and metrics.cataloged_repositories >= catalog_limit:
             return
         repo = _catalog_record(info)
@@ -171,10 +169,8 @@ def _compare_strategies(
     second: RepoTreeMetadataSource,
     repo_id: str,
     metrics: ProofMetrics,
-    rate_controller: RateController,
 ) -> None:
     for source in (first, second):
-        rate_controller.wait()
         try:
             _, measurement = source.inspect_repo(repo_id, None)
         except Exception:
@@ -351,13 +347,18 @@ def _write_reports(directory: Path, report: dict[str, object]) -> None:
 
 
 def _configure_hub_http(metrics: RequestMetrics, rate_controller: RateController) -> None:
+    def request_hook(_: httpx.Request) -> None:
+        rate_controller.wait()
+
     def response_hook(response: httpx.Response) -> None:
         metrics.observe(response)
         rate_controller.observe(response)
 
     set_client_factory(
         lambda: httpx.Client(
-            event_hooks={"response": [response_hook]}, follow_redirects=True, timeout=30.0
+            event_hooks={"request": [request_hook], "response": [response_hook]},
+            follow_redirects=True,
+            timeout=30.0,
         )
     )
 
