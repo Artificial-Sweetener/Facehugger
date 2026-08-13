@@ -64,7 +64,14 @@ class ModelInfoMetadataSource:
         if resolved_revision is None:
             raise MetadataError(f"Model metadata did not contain a revision for {repo_id}.")
         files = tuple(_normalize_sibling(item) for item in info.siblings or [])
-        return _result(self.strategy_name, repo_id, resolved_revision, files, started)
+        return _result(
+            self.strategy_name,
+            repo_id,
+            resolved_revision,
+            files,
+            isinstance(getattr(info, "gated", False), str),
+            started,
+        )
 
 
 class RepoTreeMetadataSource:
@@ -105,7 +112,7 @@ class RepoTreeMetadataSource:
             resolved_revision = revision
         if resolved_revision is None:
             raise MetadataError(f"Repository tree did not contain a revision for {repo_id}.")
-        return _result(self.strategy_name, repo_id, resolved_revision, files, started)
+        return _result(self.strategy_name, repo_id, resolved_revision, files, False, started)
 
 
 def _result(
@@ -113,10 +120,11 @@ def _result(
     repo_id: str,
     revision: str,
     files: tuple[InspectedFile, ...],
+    gated: bool,
     started: float,
 ) -> tuple[InspectedRepo, InspectionMeasurement]:
     return (
-        InspectedRepo(repo_id=repo_id, revision=revision, files=files),
+        InspectedRepo(repo_id=repo_id, revision=revision, files=files, gated=gated),
         InspectionMeasurement(
             strategy=strategy,
             duration_seconds=perf_counter() - started,

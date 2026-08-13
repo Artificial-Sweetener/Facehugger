@@ -73,7 +73,7 @@ def _lookup(arguments: argparse.Namespace) -> int:
     if arguments.json:
         print(
             json.dumps(
-                {"digest": result.digest, "matches": [match.__dict__ for match in result.matches]}
+                {"digest": result.digest, "matches": [match.as_dict() for match in result.matches]}
             )
         )
     else:

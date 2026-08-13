@@ -3,17 +3,47 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+from urllib.parse import quote
+
+HUGGING_FACE_HUB_URL = "https://huggingface.co"
 
 
 @dataclass(frozen=True)
 class Occurrence:
-    """One repository occurrence of an exact artifact digest."""
+    """One repository occurrence and its locally derived Hub links."""
 
     repo_id: str
     path: str
     revision: str
     size: int | None
     storage: str
+    gated: bool
+
+    @property
+    def repository_url(self) -> str:
+        """Return the canonical Hub page for this repository without a network request."""
+        return f"{HUGGING_FACE_HUB_URL}/{quote(self.repo_id, safe='/')}"
+
+    @property
+    def resolver_url(self) -> str:
+        """Return the revision-pinned Hub file resolver URL without a network request."""
+        return (
+            f"{self.repository_url}/resolve/{quote(self.revision, safe='')}/"
+            f"{quote(self.path, safe='/')}"
+        )
+
+    def as_dict(self) -> dict[str, str | int | bool | None]:
+        """Return the complete public occurrence contract for JSON consumers."""
+        return {
+            "repo_id": self.repo_id,
+            "path": self.path,
+            "revision": self.revision,
+            "size": self.size,
+            "storage": self.storage,
+            "gated": self.gated,
+            "repository_url": self.repository_url,
+            "resolver_url": self.resolver_url,
+        }
 
 
 @dataclass(frozen=True)
@@ -55,6 +85,7 @@ class InspectedRepo:
     repo_id: str
     revision: str
     files: tuple[InspectedFile, ...]
+    gated: bool = False
 
 
 @dataclass(frozen=True)

@@ -13,11 +13,12 @@ from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 class FakeApi:
     """Minimal model-info source with captured public response fields."""
 
-    def __init__(self, sibling: object) -> None:
+    def __init__(self, sibling: object, gated: str | bool = False) -> None:
         self.sibling = sibling
+        self.gated = gated
 
     def model_info(self, *_: object, **__: object) -> object:
-        return SimpleNamespace(sha="1" * 40, siblings=[self.sibling])
+        return SimpleNamespace(sha="1" * 40, siblings=[self.sibling], gated=self.gated)
 
 
 def test_model_info_normalizes_only_lfs_sha256() -> None:
@@ -35,6 +36,14 @@ def test_model_info_normalizes_only_lfs_sha256() -> None:
     assert file.git_blob_oid == "git-blob-id"
     assert file.xet_hash is None
     assert file.storage == "lfs"
+
+
+def test_model_info_preserves_the_public_gate_state() -> None:
+    """Public gated metadata survives normalization for the lookup contract."""
+    sibling = SimpleNamespace(rfilename="model.safetensors", size=42, blob_id=None, lfs=None)
+    source = ModelInfoMetadataSource(cast(HfApi, FakeApi(sibling, gated="auto")))
+    inspected, _ = source.inspect_repo("owner/model", None)
+    assert inspected.gated is True
 
 
 def test_model_info_rejects_invalid_lfs_sha256() -> None:

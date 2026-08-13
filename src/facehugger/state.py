@@ -99,11 +99,12 @@ class IndexState:
         now = datetime.now(UTC).isoformat()
         with self.transaction():
             self.connection.execute(
-                "INSERT INTO repos(repo_id, revision_sha, status, last_scanned_at) "
-                "VALUES (?, ?, 'indexed', ?) "
+                "INSERT INTO repos(repo_id, revision_sha, gated, status, last_scanned_at) "
+                "VALUES (?, ?, ?, 'indexed', ?) "
                 "ON CONFLICT(repo_id) DO UPDATE SET revision_sha = excluded.revision_sha, "
+                "gated = excluded.gated, "
                 "status = excluded.status, last_scanned_at = excluded.last_scanned_at",
-                (inspected.repo_id, inspected.revision, now),
+                (inspected.repo_id, inspected.revision, int(inspected.gated), now),
             )
             repo_row = self.connection.execute(
                 "SELECT id FROM repos WHERE repo_id = ?", (inspected.repo_id,)
@@ -167,8 +168,8 @@ class IndexState:
     def lookup(self, digest: bytes) -> tuple[Occurrence, ...]:
         """Return all current occurrences for one binary SHA-256 digest."""
         rows = self.connection.execute(
-            "SELECT repos.repo_id, occurrences.path, occurrences.revision_sha, artifacts.size, "
-            "occurrences.storage "
+            "SELECT repos.repo_id, repos.gated, occurrences.path, occurrences.revision_sha, "
+            "artifacts.size, occurrences.storage "
             "FROM artifacts "
             "JOIN occurrences ON occurrences.artifact_id = artifacts.id "
             "JOIN repos ON repos.id = occurrences.repo_id_fk "
@@ -183,6 +184,7 @@ class IndexState:
                 revision=str(row["revision_sha"]),
                 size=None if row["size"] is None else int(row["size"]),
                 storage=str(row["storage"]),
+                gated=bool(row["gated"]),
             )
             for row in rows
         )

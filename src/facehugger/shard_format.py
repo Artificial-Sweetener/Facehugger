@@ -10,9 +10,10 @@ from facehugger.errors import IndexIntegrityError
 from facehugger.models import IndexInfo, Occurrence
 from facehugger.state import IndexState
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 PREFIX_HEX_CHARS = 3
-RECORD_FORMAT = "facehugger-json-shard-v1"
+RECORD_FORMAT = "facehugger-json-shard-v2"
 
 
 def compile_site(
@@ -81,7 +82,8 @@ def parse_manifest(data: object) -> tuple[IndexInfo, str, int]:
     """Validate a manifest and return client-ready index metadata."""
     manifest = _mapping(data, "Manifest must be an object.")
     _require(
-        manifest.get("schema_version") == SCHEMA_VERSION, "Unsupported manifest schema version."
+        manifest.get("schema_version") in SUPPORTED_SCHEMA_VERSIONS,
+        "Unsupported manifest schema version.",
     )
     _require(manifest.get("algorithm") == "sha256", "Unsupported manifest algorithm.")
     version = _string(manifest.get("index_version"), "Manifest index version is invalid.")
@@ -107,7 +109,8 @@ def parse_manifest(data: object) -> tuple[IndexInfo, str, int]:
 def parse_shard(data: object, prefix: str) -> tuple[tuple[str, tuple[Occurrence, ...]], ...]:
     """Validate one shard and return its strictly sorted lookup records."""
     shard = _mapping(data, "Shard must be an object.")
-    _require(shard.get("v") == SCHEMA_VERSION, "Unsupported shard schema version.")
+    schema_version = shard.get("v")
+    _require(schema_version in SUPPORTED_SCHEMA_VERSIONS, "Unsupported shard schema version.")
     _require(shard.get("p") == prefix, "Shard prefix does not match the requested prefix.")
     raw_records = shard.get("r")
     if not isinstance(raw_records, list):
@@ -134,7 +137,9 @@ def parse_shard(data: object, prefix: str) -> tuple[tuple[str, tuple[Occurrence,
         raw_occurrences = record[1]
         if not isinstance(raw_occurrences, list):
             raise IndexIntegrityError("Shard occurrences must be a list.")
-        occurrences = tuple(_parse_occurrence(item) for item in cast(list[object], raw_occurrences))
+        occurrences = tuple(
+            _parse_occurrence(item, schema_version) for item in cast(list[object], raw_occurrences)
+        )
         _require(
             tuple(sorted(occurrences, key=_occurrence_key)) == occurrences,
             "Shard occurrences are not sorted.",
@@ -153,21 +158,23 @@ def _coverage(state: IndexState) -> dict[str, float | None]:
     }
 
 
-def _occurrence_record(occurrence: Occurrence) -> list[str | int | None]:
+def _occurrence_record(occurrence: Occurrence) -> list[str | int | bool | None]:
     return [
         occurrence.repo_id,
         occurrence.path,
         occurrence.revision,
         occurrence.size,
         occurrence.storage,
+        occurrence.gated,
     ]
 
 
-def _parse_occurrence(value: object) -> Occurrence:
+def _parse_occurrence(value: object, schema_version: object) -> Occurrence:
     if not isinstance(value, list):
         raise IndexIntegrityError("Shard occurrence is invalid.")
     value = cast(list[object], value)
-    if len(value) != 5:
+    expected_length = 5 if schema_version == 1 else 6
+    if len(value) != expected_length:
         raise IndexIntegrityError("Shard occurrence is invalid.")
     raw_size = value[3]
     if raw_size is None:
@@ -176,12 +183,16 @@ def _parse_occurrence(value: object) -> Occurrence:
         size = raw_size
     else:
         raise IndexIntegrityError("Shard size is invalid.")
+    gated = False if schema_version == 1 else value[5]
+    if not isinstance(gated, bool):
+        raise IndexIntegrityError("Shard gate state is invalid.")
     return Occurrence(
         repo_id=_string(value[0], "Shard repository identifier is invalid."),
         path=_string(value[1], "Shard path is invalid."),
         revision=_string(value[2], "Shard revision is invalid."),
         size=size,
         storage=_string(value[4], "Shard storage type is invalid."),
+        gated=gated,
     )
 
 

@@ -20,6 +20,7 @@ def test_state_returns_duplicate_occurrences_and_replaces_a_repo(tmp_path: Path)
             "one/model",
             "1" * 40,
             (InspectedFile("model.safetensors", 10, "git-1", _DIGEST, None, "lfs"),),
+            gated=True,
         )
         second = InspectedRepo(
             "two/model",
@@ -29,6 +30,7 @@ def test_state_returns_duplicate_occurrences_and_replaces_a_repo(tmp_path: Path)
         state.replace_repo(first, first.files)
         state.replace_repo(second, second.files)
         assert [item.repo_id for item in state.lookup(_DIGEST)] == ["one/model", "two/model"]
+        assert state.lookup(_DIGEST)[0].gated is True
 
         replacement = InspectedRepo("one/model", "3" * 40, ())
         state.replace_repo(replacement, replacement.files)
