@@ -39,6 +39,7 @@ VERIFICATION_FILE_CAP = 3
 VERIFICATION_SIZE_CAP = 10 * 1024 * 1024
 VERIFICATION_TOTAL_CAP = 50 * 1024 * 1024
 THROTTLE_REQUESTS_PER_MINUTE = 100
+MeasurementRecord = dict[str, float | int | str]
 
 
 @dataclass
@@ -57,8 +58,9 @@ class ProofMetrics:
     extension_coverage: dict[str, dict[str, int]] = field(default_factory=dict[str, dict[str, int]])
     local_lookup: dict[str, object] | None = None
     verification: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
-    strategy_measurements: dict[str, list[dict[str, float | int | str]]] = field(
-        default_factory=dict[str, list[dict[str, float | int | str]]]
+    crawl_measurements: list[MeasurementRecord] = field(default_factory=list[MeasurementRecord])
+    comparison_measurements: dict[str, list[MeasurementRecord]] = field(
+        default_factory=dict[str, list[MeasurementRecord]]
     )
     request_metrics: RequestMetrics = field(default_factory=RequestMetrics)
 
@@ -195,8 +197,8 @@ def _inspect_corpus(
         metrics.exact_hash_files += sum(file.content_sha256 is not None for file in candidates)
         for candidate in candidates:
             _record_candidate(metrics, candidate, extensions)
-        _append_measurement(
-            metrics, measurement, metrics.request_metrics.requests - requests_before
+        metrics.crawl_measurements.append(
+            _measurement_record(measurement, metrics.request_metrics.requests - requests_before)
         )
 
 
@@ -214,24 +216,23 @@ def _compare_strategies(
             _record_error(metrics, error)
             _skip(metrics, "strategy_error")
             continue
-        _append_measurement(
-            metrics, measurement, metrics.request_metrics.requests - requests_before
+        metrics.comparison_measurements.setdefault(measurement.strategy, []).append(
+            _measurement_record(measurement, metrics.request_metrics.requests - requests_before)
         )
 
 
-def _append_measurement(
-    metrics: ProofMetrics, measurement: InspectionMeasurement, http_requests: int
-) -> None:
-    metrics.strategy_measurements.setdefault(measurement.strategy, []).append(
-        {
-            "strategy": measurement.strategy,
-            "duration_seconds": measurement.duration_seconds,
-            "file_count": measurement.file_count,
-            "files_with_sha256": measurement.files_with_sha256,
-            "files_with_xet_hash": measurement.files_with_xet_hash,
-            "http_requests": http_requests,
-        }
-    )
+def _measurement_record(
+    measurement: InspectionMeasurement, http_requests: int
+) -> MeasurementRecord:
+    """Convert an adapter measurement to the compact report record schema."""
+    return {
+        "strategy": measurement.strategy,
+        "duration_seconds": measurement.duration_seconds,
+        "file_count": measurement.file_count,
+        "files_with_sha256": measurement.files_with_sha256,
+        "files_with_xet_hash": measurement.files_with_xet_hash,
+        "http_requests": http_requests,
+    }
 
 
 def _record_candidate(

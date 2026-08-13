@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from facehugger.indexer.reports import lookup_provided_hashes, summarize_strategy_comparison
+from facehugger.indexer.reports import (
+    group_measurements,
+    lookup_provided_hashes,
+    summarize_strategy_comparison,
+)
 from facehugger.models import InspectedFile, InspectedRepo
 from facehugger.state import IndexState
 
@@ -54,3 +58,21 @@ def test_strategy_comparison_selects_the_measured_lowest_request_strategy() -> N
     )
     assert comparison["selected_default"] == "model_info"
     assert comparison["strategies"]["model_info"]["repositories_over_1000_files"] == 1  # type: ignore[index]
+
+
+def test_measurement_grouping_separates_the_production_crawl_from_trial_data() -> None:
+    """Crawl metrics can be summarized without contaminating adapter comparison."""
+    grouped = group_measurements(
+        [
+            {
+                "strategy": "model_info",
+                "duration_seconds": 0.1,
+                "file_count": 1,
+                "files_with_sha256": 1,
+                "files_with_xet_hash": 0,
+                "http_requests": 1,
+            }
+        ]
+    )
+    assert list(grouped) == ["model_info"]
+    assert grouped["model_info"][0]["http_requests"] == 1

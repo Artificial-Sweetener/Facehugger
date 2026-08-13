@@ -28,7 +28,8 @@ class ProofMetricsView(Protocol):
     extension_coverage: dict[str, dict[str, int]]
     local_lookup: dict[str, object] | None
     verification: list[dict[str, object]]
-    strategy_measurements: dict[str, list[dict[str, float | int | str]]]
+    crawl_measurements: list[dict[str, float | int | str]]
+    comparison_measurements: dict[str, list[dict[str, float | int | str]]]
     request_metrics: RequestMetrics
 
 
@@ -46,11 +47,8 @@ def build_proof_report(
 ) -> dict[str, object]:
     """Build the complete review record from bounded proof measurements."""
     counts = state.counts()
-    durations = [
-        float(item["duration_seconds"])
-        for values in metrics.strategy_measurements.values()
-        for item in values
-    ]
+    crawl_by_strategy = group_measurements(metrics.crawl_measurements)
+    durations = [float(item["duration_seconds"]) for item in metrics.crawl_measurements]
     shard_sizes = cast(list[int], compilation["shard_sizes"])
     estimated_calls = _project_full_catalog_calls(metrics)
     return {
@@ -84,9 +82,9 @@ def build_proof_report(
             "total": metrics.request_metrics.requests,
             "status_counts": metrics.request_metrics.statuses,
             "by_endpoint": metrics.request_metrics.categories,
-            "by_strategy": metrics.strategy_measurements,
+            "by_strategy": summarize_strategy_comparison(crawl_by_strategy)["strategies"],
         },
-        "strategy_comparison": summarize_strategy_comparison(metrics.strategy_measurements),
+        "strategy_comparison": summarize_strategy_comparison(metrics.comparison_measurements),
         "resolver_requests": len(metrics.verification),
         "errors": {
             "429": metrics.request_metrics.statuses.get("429", 0),
@@ -172,6 +170,19 @@ def _extension_coverage(
     }
 
 
+def group_measurements(
+    measurements: Iterable[dict[str, float | int | str]],
+) -> dict[str, list[dict[str, float | int | str]]]:
+    """Group compact measurements by their adapter strategy."""
+    grouped: dict[str, list[dict[str, float | int | str]]] = {}
+    for measurement in measurements:
+        strategy = measurement["strategy"]
+        if not isinstance(strategy, str):
+            raise ValueError("Strategy measurement is invalid.")
+        grouped.setdefault(strategy, []).append(measurement)
+    return grouped
+
+
 def summarize_strategy_comparison(
     measurements: Mapping[str, list[dict[str, float | int | str]]],
 ) -> dict[str, object]:
@@ -212,7 +223,9 @@ def _project_full_catalog_calls(metrics: ProofMetricsView) -> float | None:
     if not metrics.inspected_repositories:
         return None
     catalog_requests = metrics.request_metrics.categories.get("model_catalog", 0)
-    inspection_requests = metrics.request_metrics.categories.get("model_info", 0)
+    inspection_requests = sum(
+        int(measurement["http_requests"]) for measurement in metrics.crawl_measurements
+    )
     per_repo = inspection_requests / metrics.inspected_repositories
     return catalog_requests + metrics.eligible_catalog_repositories * per_repo
 
