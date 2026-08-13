@@ -71,12 +71,7 @@ def run_proof(
     metrics = ProofMetrics()
     controller = RateController(THROTTLE_REQUESTS_PER_MINUTE)
     _configure_hub_http(metrics.request_metrics, controller)
-    api = HfApi(
-        token=token,
-        library_name="facehugger",
-        library_version="0.0.0",
-        user_agent="https://github.com/Artificial-Sweetener/Facehugger",
-    )
+    api = create_hub_api(token)
     extensions = load_artifact_extensions(root / "config" / "artifacts.toml")
     corpus = select_proof_corpus(
         _catalog(api, extensions, metrics, catalog_limit or PROOF_CATALOG_CAP),
@@ -146,6 +141,16 @@ def _catalog(
             continue
         metrics.eligible_catalog_repositories += 1
         yield repo
+
+
+def create_hub_api(token: str) -> HfApi:
+    """Create the dedicated Hub client with an attributable project user agent."""
+    return HfApi(
+        token=token,
+        library_name="facehugger",
+        library_version="0.0.0",
+        user_agent="https://github.com/Artificial-Sweetener/Facehugger",
+    )
 
 
 def _catalog_record(info: ModelInfo) -> CatalogRepo:
