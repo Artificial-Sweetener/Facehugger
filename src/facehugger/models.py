@@ -99,3 +99,12 @@ class CatalogRepo:
     private: bool
     gated: bool
     sibling_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PendingRepo:
+    """One cataloged repository that needs metadata inspection."""
+
+    repo_id: str
+    revision: str | None
+    gated: bool

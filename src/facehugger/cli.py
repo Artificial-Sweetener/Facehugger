@@ -1,4 +1,4 @@
-"""Command-line entry points for public lookup and bounded proof execution."""
+"""Command-line entry points for public lookup and index construction."""
 
 import argparse
 import json
@@ -12,6 +12,7 @@ from platformdirs import user_cache_dir
 from facehugger.client import FacehuggerClient
 from facehugger.errors import FacehuggerError
 from facehugger.indexer.benchmarks import update_deployment_measurements
+from facehugger.indexer.crawl import run_full_crawl
 from facehugger.indexer.proof import run_proof
 from facehugger.indexer.reports import write_proof_reports
 
@@ -37,6 +38,11 @@ def main() -> int:
     proof.add_argument("--root", type=Path, default=Path.cwd())
     proof.add_argument("--version", required=True)
     proof.add_argument("--catalog-limit", type=int)
+    crawl = commands.add_parser("crawl")
+    crawl.add_argument("--root", type=Path, default=Path.cwd())
+    crawl.add_argument("--version", required=True)
+    crawl.add_argument("--catalog-page-limit", type=int)
+    crawl.add_argument("--inspection-limit", type=int, default=25_000)
     measure_pages = commands.add_parser("measure-pages")
     measure_pages.add_argument("--report", type=Path, default=Path("reports/proof.json"))
     measure_pages.add_argument("--pages-url", required=True)
@@ -51,6 +57,16 @@ def main() -> int:
             return _index_status(arguments)
         if arguments.command == "measure-pages":
             return _measure_pages(arguments)
+        if arguments.command == "crawl":
+            progress = run_full_crawl(
+                root=arguments.root,
+                token=os.environ["HF_TOKEN"],
+                version=arguments.version,
+                catalog_page_limit=arguments.catalog_page_limit,
+                inspection_limit=arguments.inspection_limit,
+            )
+            print(json.dumps(progress.as_dict(), sort_keys=True))
+            return 0
         token = os.environ["HF_TOKEN"]
         run_proof(
             root=arguments.root,
@@ -60,7 +76,7 @@ def main() -> int:
         )
         return 0
     except KeyError:
-        print("HF_TOKEN is required for the proof command.", file=sys.stderr)
+        print("HF_TOKEN is required for index construction.", file=sys.stderr)
         return 3
     except FacehuggerError as error:
         print(str(error), file=sys.stderr)

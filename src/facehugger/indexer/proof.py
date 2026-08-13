@@ -7,7 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import httpx
-from huggingface_hub import HfApi, set_client_factory
+from huggingface_hub import HfApi
 from huggingface_hub import (
     hf_hub_download as _hf_hub_download,  # pyright: ignore[reportUnknownVariableType]
 )
@@ -17,6 +17,7 @@ from facehugger.errors import ProofStopError
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
 from facehugger.indexer.benchmarks import measure_local_lookup
 from facehugger.indexer.catalog import ProofCorpus, select_proof_corpus
+from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import (
     InspectionMeasurement,
     ModelInfoMetadataSource,
@@ -72,7 +73,7 @@ def run_proof(
     started = datetime.now(UTC)
     metrics = ProofMetrics()
     controller = RateController(THROTTLE_REQUESTS_PER_MINUTE)
-    _configure_hub_http(metrics.request_metrics, controller)
+    configure_hub_http(metrics.request_metrics, controller)
     api = create_hub_api(token)
     extensions = load_artifact_extensions(root / "config" / "artifacts.toml")
     corpus = select_proof_corpus(
@@ -143,16 +144,6 @@ def _catalog(
             continue
         metrics.eligible_catalog_repositories += 1
         yield repo
-
-
-def create_hub_api(token: str) -> HfApi:
-    """Create the dedicated Hub client with an attributable project user agent."""
-    return HfApi(
-        token=token,
-        library_name="facehugger",
-        library_version="0.0.0",
-        user_agent="https://github.com/Artificial-Sweetener/Facehugger",
-    )
 
 
 def _catalog_record(info: ModelInfo) -> CatalogRepo:
@@ -361,20 +352,3 @@ def _record_error(metrics: ProofMetrics, error: Exception) -> None:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _configure_hub_http(metrics: RequestMetrics, controller: RateController) -> None:
-    def request_hook(_: httpx.Request) -> None:
-        controller.wait()
-
-    def response_hook(response: httpx.Response) -> None:
-        metrics.observe(response)
-        controller.observe(response)
-
-    set_client_factory(
-        lambda: httpx.Client(
-            event_hooks={"request": [request_hook], "response": [response_hook]},
-            follow_redirects=True,
-            timeout=30.0,
-        )
-    )

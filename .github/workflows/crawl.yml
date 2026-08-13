@@ -2,26 +2,78 @@ name: Full crawl
 
 on:
   workflow_dispatch:
+    inputs:
+      inspection_limit:
+        description: Maximum changed repositories to inspect in this bounded invocation
+        required: false
+        default: "25000"
+        type: string
   schedule:
     - cron: "17 3 * * *"
 
 permissions:
-  contents: read
+  contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: facehugger-state
   cancel-in-progress: false
 
 jobs:
-  guard:
+  crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
+    environment:
+      name: github-pages
     steps:
-      - name: Require owner approval
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest
+      - name: Restore durable crawler state
         env:
-          FACEHUGGER_FULL_CRAWL_APPROVED: ${{ vars.FACEHUGGER_FULL_CRAWL_APPROVED }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          test "$FACEHUGGER_FULL_CRAWL_APPROVED" = "true" || {
-            echo "Full crawl is disabled pending the Phase 0 Stop and Look review."
-            exit 0
-          }
-          echo "Full crawl approval is present; no full crawler is implemented in Phase 0."
+          mkdir -p .facehugger
+          gh release download full-crawl-state --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger || true
+          test ! -f .facehugger/full.sqlite.zst || (cd .facehugger && sha256sum --check full.sqlite.zst.sha256)
+          test ! -f .facehugger/full.sqlite.zst || zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
+      - id: crawl
+        name: Advance resumable full crawl
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          INDEX_VERSION: full-${{ github.run_id }}
+        run: |
+          uv run facehugger crawl --root . --version "$INDEX_VERSION" --inspection-limit "${{ inputs.inspection_limit || '25000' }}" | tee crawl-output.json
+          echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
+      - name: Package durable crawler state
+        if: always() && hashFiles('.facehugger/full.sqlite') != ''
+        run: |
+          zstd --quiet --force .facehugger/full.sqlite -o .facehugger/full.sqlite.zst
+          sha256sum .facehugger/full.sqlite.zst > .facehugger/full.sqlite.zst.sha256
+          test "$(stat --printf='%s' .facehugger/full.sqlite.zst)" -le 1900000000
+      - name: Publish durable crawler state and progress
+        if: always() && hashFiles('.facehugger/full.sqlite.zst') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state." || true
+          gh release upload full-crawl-state .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256 reports/full-crawl.json --clobber
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.crawl.outputs.published == 'true'
+        with:
+          path: site-staging
+      - id: deployment
+        if: steps.crawl.outputs.published == 'true'
+        uses: actions/deploy-pages@v4
+      - name: Verify completed publication
+        if: steps.crawl.outputs.published == 'true'
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}
+        run: curl --fail --show-error --location --head "$PAGES_URL/api/v1/manifest.json"

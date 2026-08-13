@@ -77,3 +77,20 @@ def test_failed_repository_replacement_preserves_the_previous_verified_state(
         state.validate()
     finally:
         state.close()
+
+
+def test_inspection_failure_preserves_verified_occurrences_for_later_retry(tmp_path: Path) -> None:
+    """A recoverable crawl failure retains the last known lookup result."""
+    state = IndexState(tmp_path / "state.sqlite")
+    try:
+        repo = InspectedRepo(
+            "example/model",
+            "1" * 40,
+            (InspectedFile("model.safetensors", 10, None, _DIGEST, None, "lfs"),),
+        )
+        state.replace_repo(repo, repo.files)
+        state.record_inspection_failure(repo.repo_id)
+        assert state.lookup(_DIGEST)[0].repo_id == repo.repo_id
+        assert state.counts()["inspection_errors"] == 1
+    finally:
+        state.close()

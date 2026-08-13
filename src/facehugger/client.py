@@ -77,12 +77,12 @@ class FacehuggerClient:
         return self._fetch_json("api/v1/manifest.json", path)
 
     def _shard(self, version: str, base_path: str, prefix: str) -> dict[str, object]:
-        path = self.cache_dir / "shards" / version / prefix[:2] / f"{prefix[2]}.json"
+        path = self.cache_dir / "shards" / version / prefix[:2] / f"{prefix[2:]}.json"
         if path.exists():
             return self._read_json(path)
         if self.offline:
             raise IndexUnavailableError("No cached shard is available in offline mode.")
-        relative_path = f"{base_path}/{prefix[:2]}/{prefix[2]}.json"
+        relative_path = f"{base_path}/{prefix[:2]}/{prefix[2:]}.json"
         return self._fetch_json(relative_path, path)
 
     def _fetch_json(self, relative_path: str, cache_path: Path) -> dict[str, object]:

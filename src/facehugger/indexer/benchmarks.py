@@ -72,7 +72,12 @@ def _cors_headers(base_url: str, digest: str) -> dict[str, str | None]:
     base_path = cast(dict[str, object], manifest).get("base_path")
     if not isinstance(base_path, str):
         raise ValueError("Static manifest base path is invalid.")
-    shard = httpx.get(_url(base_url, f"{base_path}/{digest[:2]}/{digest[2]}.json"), timeout=30.0)
+    manifest_mapping = cast(dict[str, object], manifest)
+    prefix_length = manifest_mapping.get("prefix_hex_chars")
+    if not isinstance(prefix_length, int) or prefix_length < 3:
+        raise ValueError("Static manifest shard prefix length is invalid.")
+    prefix = digest[:prefix_length]
+    shard = httpx.get(_url(base_url, f"{base_path}/{prefix[:2]}/{prefix[2:]}.json"), timeout=30.0)
     shard.raise_for_status()
     return {
         "manifest_access_control_allow_origin": response.headers.get("Access-Control-Allow-Origin"),
