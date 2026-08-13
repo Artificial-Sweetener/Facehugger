@@ -71,7 +71,12 @@ def run_proof(
     metrics = ProofMetrics()
     controller = RateController(THROTTLE_REQUESTS_PER_MINUTE)
     _configure_hub_http(metrics.request_metrics, controller)
-    api = HfApi(token=token, library_name="facehugger", library_version="0.0.0")
+    api = HfApi(
+        token=token,
+        library_name="facehugger",
+        library_version="0.0.0",
+        user_agent="https://github.com/Artificial-Sweetener/Facehugger",
+    )
     extensions = load_artifact_extensions(root / "config" / "artifacts.toml")
     corpus = select_proof_corpus(
         _catalog(api, extensions, metrics, catalog_limit or PROOF_CATALOG_CAP),
@@ -127,6 +132,7 @@ def _catalog(
     for info in api.list_models(
         sort="downloads",
         expand=["sha", "siblings", "lastModified", "private", "gated", "downloads"],
+        limit=catalog_limit,
     ):
         if metrics.cataloged_repositories >= catalog_limit:
             return
