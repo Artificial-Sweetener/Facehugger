@@ -86,6 +86,7 @@ def build_proof_report(
             "by_endpoint": metrics.request_metrics.categories,
             "by_strategy": metrics.strategy_measurements,
         },
+        "strategy_comparison": summarize_strategy_comparison(metrics.strategy_measurements),
         "resolver_requests": len(metrics.verification),
         "errors": {
             "429": metrics.request_metrics.statuses.get("429", 0),
@@ -169,6 +170,42 @@ def _extension_coverage(
         }
         for extension, counts in values.items()
     }
+
+
+def summarize_strategy_comparison(
+    measurements: Mapping[str, list[dict[str, float | int | str]]],
+) -> dict[str, object]:
+    summaries: dict[str, dict[str, object]] = {}
+    for name, values in measurements.items():
+        latencies = [float(value["duration_seconds"]) for value in values]
+        requests = [float(value.get("http_requests", 0)) for value in values]
+        summaries[name] = {
+            "repositories": len(values),
+            "latency_seconds": summarize(latencies),
+            "http_requests": summarize(requests),
+            "repositories_over_1000_files": sum(
+                int(value["file_count"]) > 1000 for value in values
+            ),
+            "files_with_exact_sha256": sum(int(value["files_with_sha256"]) for value in values),
+            "files_with_xet_metadata": sum(int(value["files_with_xet_hash"]) for value in values),
+        }
+    selected = _selected_strategy(summaries)
+    return {
+        "compared_repositories": max((len(values) for values in measurements.values()), default=0),
+        "strategies": summaries,
+        "selected_default": selected,
+        "selection_basis": "Lowest measured mean HTTP requests, then mean latency.",
+    }
+
+
+def _selected_strategy(summaries: Mapping[str, Mapping[str, object]]) -> str | None:
+    candidates: list[tuple[float, float, str]] = []
+    for name, summary in summaries.items():
+        requests = cast(dict[str, float | None], summary["http_requests"])["mean"]
+        latency = cast(dict[str, float | None], summary["latency_seconds"])["mean"]
+        if requests is not None and latency is not None:
+            candidates.append((requests, latency, name))
+    return None if not candidates else min(candidates)[2]
 
 
 def _project_full_catalog_calls(metrics: ProofMetricsView) -> float | None:

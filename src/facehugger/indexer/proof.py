@@ -33,6 +33,7 @@ from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
 PROOF_REPO_CAP = 5000
+PROOF_CATALOG_CAP = 50000
 STRATEGY_COMPARISON_REPO_CAP = 200
 VERIFICATION_FILE_CAP = 3
 VERIFICATION_SIZE_CAP = 10 * 1024 * 1024
@@ -73,7 +74,7 @@ def run_proof(
     api = HfApi(token=token, library_name="facehugger", library_version="0.0.0")
     extensions = load_artifact_extensions(root / "config" / "artifacts.toml")
     corpus = select_proof_corpus(
-        _catalog(api, extensions, metrics, catalog_limit),
+        _catalog(api, extensions, metrics, catalog_limit or PROOF_CATALOG_CAP),
         extensions,
         _extra_repos(root / "fixtures" / "proof-repos-extra.txt"),
     )
@@ -121,13 +122,13 @@ def _catalog(
     api: HfApi,
     extensions: tuple[str, ...],
     metrics: ProofMetrics,
-    catalog_limit: int | None,
+    catalog_limit: int,
 ) -> Iterable[CatalogRepo]:
     for info in api.list_models(
         sort="downloads",
         expand=["sha", "siblings", "lastModified", "private", "gated", "downloads"],
     ):
-        if catalog_limit is not None and metrics.cataloged_repositories >= catalog_limit:
+        if metrics.cataloged_repositories >= catalog_limit:
             return
         repo = _catalog_record(info)
         metrics.cataloged_repositories += 1

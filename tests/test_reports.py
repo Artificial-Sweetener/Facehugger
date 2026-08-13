@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from facehugger.indexer.reports import lookup_provided_hashes
+from facehugger.indexer.reports import lookup_provided_hashes, summarize_strategy_comparison
 from facehugger.models import InspectedFile, InspectedRepo
 from facehugger.state import IndexState
 
@@ -26,3 +26,31 @@ def test_optional_hash_file_resolves_normalized_exact_matches(tmp_path: Path) ->
     assert results is not None
     assert results[0]["digest"] == digest
     assert results[0]["matches"][0]["repo_id"] == "example/model"  # type: ignore[index]
+
+
+def test_strategy_comparison_selects_the_measured_lowest_request_strategy() -> None:
+    """The default adapter selection follows recorded strategy measurements."""
+    comparison = summarize_strategy_comparison(
+        {
+            "model_info": [
+                {
+                    "duration_seconds": 0.2,
+                    "file_count": 1001,
+                    "files_with_sha256": 4,
+                    "files_with_xet_hash": 2,
+                    "http_requests": 1,
+                }
+            ],
+            "repo_tree": [
+                {
+                    "duration_seconds": 0.1,
+                    "file_count": 1001,
+                    "files_with_sha256": 4,
+                    "files_with_xet_hash": 2,
+                    "http_requests": 2,
+                }
+            ],
+        }
+    )
+    assert comparison["selected_default"] == "model_info"
+    assert comparison["strategies"]["model_info"]["repositories_over_1000_files"] == 1  # type: ignore[index]
