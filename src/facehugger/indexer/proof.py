@@ -308,6 +308,7 @@ def _report(
         "api_requests": {
             "total": metrics.request_metrics.requests,
             "status_counts": metrics.request_metrics.statuses,
+            "by_endpoint": metrics.request_metrics.categories,
             "by_strategy": metrics.strategy_measurements,
         },
         "resolver_requests": len(metrics.verification),

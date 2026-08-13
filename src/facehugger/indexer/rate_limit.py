@@ -13,6 +13,7 @@ class RequestMetrics:
 
     requests: int = 0
     statuses: dict[str, int] = field(default_factory=dict[str, int])
+    categories: dict[str, int] = field(default_factory=dict[str, int])
     rate_limit: str | None = None
     rate_limit_policy: str | None = None
     rate_limit_remaining: str | None = None
@@ -22,11 +23,25 @@ class RequestMetrics:
         self.requests += 1
         status = str(response.status_code)
         self.statuses[status] = self.statuses.get(status, 0) + 1
+        category = _request_category(response.request.url.path)
+        self.categories[category] = self.categories.get(category, 0) + 1
         self.rate_limit = response.headers.get("RateLimit", self.rate_limit)
         self.rate_limit_policy = response.headers.get("RateLimit-Policy", self.rate_limit_policy)
         self.rate_limit_remaining = response.headers.get(
             "RateLimit-Remaining", self.rate_limit_remaining
         )
+
+
+def _request_category(path: str) -> str:
+    if "/tree/" in path:
+        return "repo_tree"
+    if path.startswith("/api/models/"):
+        return "model_info"
+    if path.startswith("/api/models"):
+        return "model_catalog"
+    if "/resolve/" in path:
+        return "resolver"
+    return "other"
 
 
 class RateController:
@@ -56,3 +71,8 @@ class RateController:
         retry_after = response.headers.get("Retry-After")
         if retry_after is not None and retry_after.isdigit():
             self._paused_until = datetime.now(UTC) + timedelta(seconds=int(retry_after))
+
+    @property
+    def paused_until(self) -> datetime | None:
+        """Return the current server-requested pause deadline, if any."""
+        return self._paused_until
