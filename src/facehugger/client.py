@@ -11,7 +11,7 @@ from platformdirs import user_cache_dir
 
 from facehugger.errors import IndexIntegrityError, IndexUnavailableError
 from facehugger.hashes import normalize_sha256
-from facehugger.models import LookupResult
+from facehugger.models import IndexInfo, LookupResult
 from facehugger.shard_format import parse_manifest, parse_shard
 
 
@@ -52,6 +52,11 @@ class FacehuggerClient:
             else records[position][1]
         )
         return LookupResult("sha256", digest, index, matches)
+
+    def index_info(self) -> IndexInfo:
+        """Return metadata for the current static index without fetching a shard."""
+        index, _, _ = parse_manifest(self._manifest())
+        return index
 
     def _manifest(self) -> dict[str, object]:
         path = self.cache_dir / "manifest.json"

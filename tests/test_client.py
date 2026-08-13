@@ -41,6 +41,7 @@ def test_client_fetches_only_manifest_and_derived_shard_then_uses_cache(
     client = FacehuggerClient(base_url="https://example.test/", cache_dir=tmp_path)
     result = client.lookup(_DIGEST)
     assert result.matches[0].repo_id == "example/model"
+    assert client.index_info().version == "proof"
     assert requests == [
         "https://example.test/api/v1/manifest.json",
         "https://example.test/api/v1/index/proof/sha256/ab/c.json",
