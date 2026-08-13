@@ -64,7 +64,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state." || true
-          gh release upload full-crawl-state .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256 reports/full-crawl.json --clobber
+          assets=(.facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256)
+          test ! -f reports/full-crawl.json || assets+=(reports/full-crawl.json)
+          gh release upload full-crawl-state "${assets[@]}" --clobber
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:

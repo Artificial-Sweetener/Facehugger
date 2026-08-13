@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pytest import MonkeyPatch
 
 from facehugger.indexer.crawl import CATALOG_URL, advance_catalog, normalize_catalog_record
 from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
@@ -52,7 +53,7 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
 
     monkeypatch.setattr("facehugger.indexer.crawl.normalize_catalog_record", catalog_item)
     try:
-        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, 1) == 1
+        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, 1) == (1, False)
         assert (
             state.get_metadata("catalog_next_url")
             == "https://huggingface.co/api/models?cursor=next"
@@ -60,7 +61,10 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
         assert state.catalog_generation_complete() is False
         assert state.lookup(bytes.fromhex("ab" * 32))
 
-        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, None) == 1
+        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, None) == (
+            1,
+            False,
+        )
         assert state.catalog_generation_complete() is True
         assert state.get_metadata("catalog_next_url") is None
         assert not state.lookup(bytes.fromhex("ab" * 32))
@@ -88,6 +92,36 @@ def test_catalog_record_normalizes_the_public_hub_page() -> None:
     assert repo.repo_id == "owner/model"
     assert repo.gated is True
     assert repo.sibling_paths == ("weights/model.safetensors",)
+
+
+def test_catalog_timeout_leaves_a_resumable_continuation(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Transient catalog transport failures do not discard prior durable crawler state."""
+    state = IndexState(tmp_path / "state.sqlite")
+
+    class TimeoutCatalogClient:
+        """A transport that consistently times out after the crawler's bounded retries."""
+
+        def get(self, url: str, *, params: Any = None) -> httpx.Response:
+            request = httpx.Request("GET", url)
+            raise httpx.ReadTimeout("timed out", request=request)
+
+    def no_sleep(seconds: float) -> None:
+        """Keep the transient-failure regression test deterministic and immediate."""
+        del seconds
+
+    try:
+        monkeypatch.setattr("facehugger.indexer.crawl.sleep", no_sleep)
+        generation = state.start_catalog_generation()
+        assert advance_catalog(state, TimeoutCatalogClient(), (".bin",), generation, None) == (
+            0,
+            True,
+        )
+        assert state.catalog_generation_complete() is False
+        assert state.get_metadata("active_catalog_generation") == str(generation)
+    finally:
+        state.close()
 
 
 def test_changed_catalog_revision_is_the_only_reinspection_candidate(tmp_path: Path) -> None:

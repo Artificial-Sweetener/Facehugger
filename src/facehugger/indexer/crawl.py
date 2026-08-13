@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import sleep
 from typing import Any, Protocol, cast
 
 import httpx
@@ -21,6 +22,7 @@ CATALOG_PAGE_SIZE = 100
 CRAWL_REQUESTS_PER_MINUTE = 100
 DEFAULT_INSPECTION_LIMIT = 25_000
 MAX_PUBLISHED_SITE_BYTES = 900 * 1024 * 1024
+CATALOG_RETRY_ATTEMPTS = 3
 
 
 class CatalogClient(Protocol):
@@ -38,6 +40,7 @@ class CrawlProgress:
     generation: int
     catalog_pages: int
     catalog_complete: bool
+    catalog_stalled: bool
     cataloged_repositories: int
     inspections: int
     pending_repositories: int
@@ -49,6 +52,7 @@ class CrawlProgress:
             "generation": self.generation,
             "catalog_pages": self.catalog_pages,
             "catalog_complete": self.catalog_complete,
+            "catalog_stalled": self.catalog_stalled,
             "cataloged_repositories": self.cataloged_repositories,
             "inspections": self.inspections,
             "pending_repositories": self.pending_repositories,
@@ -82,20 +86,22 @@ def run_full_crawl(
     try:
         catalog_page_count = 0
         if not state.catalog_generation_complete():
-            catalog_page_count = advance_catalog(
+            catalog_page_count, catalog_stalled = advance_catalog(
                 state,
                 catalog_client,
                 extensions,
                 generation,
                 catalog_page_limit,
             )
+        else:
+            catalog_stalled = False
         inspections = 0
-        if state.catalog_generation_complete():
+        if state.catalog_generation_complete() and not catalog_stalled:
             inspections = _inspect_pending(state, api, extensions, inspection_limit)
         catalog_complete = state.catalog_generation_complete()
         pending = state.pending_repository_count()
         published = False
-        if catalog_complete and pending == 0:
+        if catalog_complete and not catalog_stalled and pending == 0:
             state.validate()
             _compile_staged_site(state, root, version)
             state.complete_catalog_generation()
@@ -106,6 +112,7 @@ def run_full_crawl(
                 generation=generation,
                 catalog_pages=catalog_page_count,
                 catalog_complete=catalog_complete,
+                catalog_stalled=catalog_stalled,
                 cataloged_repositories=_cataloged_count(state, generation),
                 inspections=inspections,
                 pending_repositories=pending,
@@ -117,6 +124,7 @@ def run_full_crawl(
             generation=generation,
             catalog_pages=catalog_page_count,
             catalog_complete=catalog_complete,
+            catalog_stalled=catalog_stalled,
             cataloged_repositories=_cataloged_count(state, generation),
             inspections=inspections,
             pending_repositories=pending,
@@ -157,16 +165,18 @@ def advance_catalog(
     extensions: tuple[str, ...],
     generation: int,
     page_limit: int | None,
-) -> int:
+) -> tuple[int, bool]:
     """Persist catalog pages until exhausted or the invocation's page budget is reached."""
     next_url = state.get_metadata("catalog_next_url")
     pages = 0
     while page_limit is None or pages < page_limit:
-        response = client.get(
+        response = _catalog_response(
+            client,
             CATALOG_URL if next_url is None else next_url,
-            params=_catalog_params() if next_url is None else None,
+            _catalog_params() if next_url is None else None,
         )
-        response.raise_for_status()
+        if response is None:
+            return pages, True
         payload = response.json()
         if not isinstance(payload, list):
             raise RuntimeError("Model catalog returned an invalid page.")
@@ -179,9 +189,9 @@ def advance_catalog(
         next_url = _next_url(response)
         if next_url is None:
             state.finish_catalog_generation(generation)
-            return pages
+            return pages, False
         state.set_metadata("catalog_next_url", next_url)
-    return pages
+    return pages, False
 
 
 def _catalog_params() -> dict[str, object]:
@@ -192,6 +202,25 @@ def _catalog_params() -> dict[str, object]:
         "limit": CATALOG_PAGE_SIZE,
         "expand": ["sha", "siblings", "lastModified", "private", "gated", "downloads"],
     }
+
+
+def _catalog_response(
+    client: CatalogClient, url: str, params: dict[str, object] | None
+) -> httpx.Response | None:
+    """Return one catalog page, retrying only transient Hub failures within this invocation."""
+    for attempt in range(CATALOG_RETRY_ATTEMPTS):
+        try:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code not in {429, 500, 502, 503, 504}:
+                raise
+        except httpx.TransportError:
+            pass
+        if attempt + 1 < CATALOG_RETRY_ATTEMPTS:
+            sleep(2**attempt)
+    return None
 
 
 def normalize_catalog_record(value: object) -> CatalogRepo:
