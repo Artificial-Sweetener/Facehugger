@@ -42,7 +42,15 @@ class FacehuggerClient:
         manifest = self._manifest()
         index, base_path, prefix_length = parse_manifest(manifest)
         prefix = digest[:prefix_length]
-        shard = self._shard(index.version, base_path, prefix)
+        try:
+            shard = self._shard(index.version, base_path, prefix)
+        except IndexUnavailableError as error:
+            if "404" not in str(error):
+                raise
+            manifest = self._manifest(force_refresh=True)
+            index, base_path, prefix_length = parse_manifest(manifest)
+            prefix = digest[:prefix_length]
+            shard = self._shard(index.version, base_path, prefix)
         records = parse_shard(shard, prefix)
         suffixes = tuple(record[0] for record in records)
         position = bisect_left(suffixes, digest[prefix_length:])
@@ -58,9 +66,9 @@ class FacehuggerClient:
         index, _, _ = parse_manifest(self._manifest())
         return index
 
-    def _manifest(self) -> dict[str, object]:
+    def _manifest(self, *, force_refresh: bool = False) -> dict[str, object]:
         path = self.cache_dir / "manifest.json"
-        if path.exists() and self._fresh(path):
+        if not force_refresh and path.exists() and self._fresh(path):
             return self._read_json(path)
         if self.offline:
             if path.exists():
@@ -75,14 +83,7 @@ class FacehuggerClient:
         if self.offline:
             raise IndexUnavailableError("No cached shard is available in offline mode.")
         relative_path = f"{base_path}/{prefix[:2]}/{prefix[2]}.json"
-        try:
-            return self._fetch_json(relative_path, path)
-        except IndexUnavailableError as error:
-            if "404" not in str(error):
-                raise
-            refreshed = self._fetch_json("api/v1/manifest.json", self.cache_dir / "manifest.json")
-            _, refreshed_base_path, _ = parse_manifest(refreshed)
-            return self._fetch_json(f"{refreshed_base_path}/{prefix[:2]}/{prefix[2]}.json", path)
+        return self._fetch_json(relative_path, path)
 
     def _fetch_json(self, relative_path: str, cache_path: Path) -> dict[str, object]:
         try:
