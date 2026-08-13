@@ -24,7 +24,7 @@ from facehugger.indexer.metadata_sources import (
     RepoTreeMetadataSource,
 )
 from facehugger.indexer.rate_limit import RateController, RequestMetrics
-from facehugger.models import CatalogRepo
+from facehugger.models import CatalogRepo, InspectedFile
 from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
@@ -46,6 +46,9 @@ class ProofMetrics:
     skipped_repositories: dict[str, int] = field(default_factory=dict[str, int])
     candidate_files: int = 0
     exact_hash_files: int = 0
+    candidate_bytes: int = 0
+    exact_hash_bytes: int = 0
+    extension_coverage: dict[str, dict[str, int]] = field(default_factory=dict[str, dict[str, int]])
     verification: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     strategy_measurements: dict[str, list[dict[str, float | int | str]]] = field(
         default_factory=dict[str, list[dict[str, float | int | str]]]
@@ -100,6 +103,8 @@ def run_proof(
             metrics.exact_hash_files += sum(
                 item.content_sha256 is not None for item in candidate_files
             )
+            for candidate in candidate_files:
+                _record_candidate(metrics, candidate, extensions)
             _append_measurement(metrics, measurement)
         _verify_small_files(api, state, token, metrics, root, extensions)
         generated_at = datetime.now(UTC)
@@ -193,6 +198,28 @@ def _append_measurement(metrics: ProofMetrics, measurement: InspectionMeasuremen
     )
 
 
+def _record_candidate(
+    metrics: ProofMetrics, candidate: InspectedFile, extensions: tuple[str, ...]
+) -> None:
+    extension = next(suffix for suffix in extensions if candidate.path.casefold().endswith(suffix))
+    coverage = metrics.extension_coverage.setdefault(
+        extension,
+        {
+            "candidate_files": 0,
+            "exact_hash_files": 0,
+            "candidate_bytes": 0,
+            "exact_hash_bytes": 0,
+        },
+    )
+    coverage["candidate_files"] += 1
+    metrics.candidate_bytes += candidate.size or 0
+    coverage["candidate_bytes"] += candidate.size or 0
+    if candidate.content_sha256 is not None:
+        coverage["exact_hash_files"] += 1
+        metrics.exact_hash_bytes += candidate.size or 0
+        coverage["exact_hash_bytes"] += candidate.size or 0
+
+
 def _verify_small_files(
     api: HfApi,
     state: IndexState,
@@ -270,8 +297,10 @@ def _report(
             "candidate_files_with_sha256": _ratio(
                 metrics.exact_hash_files, metrics.candidate_files
             ),
-            "candidate_bytes_with_sha256": None,
-            "by_extension": None,
+            "candidate_bytes_with_sha256": _ratio(
+                metrics.exact_hash_bytes, metrics.candidate_bytes
+            ),
+            "by_extension": metrics.extension_coverage,
         },
         "unique_hashes": counts["unique_hashes"],
         "total_occurrences": counts["occurrences"],
