@@ -1,0 +1,66 @@
+name: Phase 0 proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable proof index version
+        required: true
+        default: proof-20260813
+      catalog_limit:
+        description: Optional catalog-row ceiling; leave empty for the complete public catalog
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: facehugger-state
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest
+      - name: Run bounded Phase 0 proof
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          uv run facehugger proof --root . --version "${{ inputs.version }}"
+          ${{ inputs.catalog_limit && format('--catalog-limit {0}', inputs.catalog_limit) || '' }}
+      - name: Package immutable proof state
+        run: |
+          zstd --quiet --force .facehugger/proof.sqlite -o proof-state.sqlite.zst
+          sha256sum proof-state.sqlite.zst > proof-state.sqlite.zst.sha256
+      - name: Publish proof evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create phase-0-proof --prerelease --title "Phase 0 proof" --notes "Bounded Phase 0 evidence." || true
+          gh release upload phase-0-proof reports/proof.json reports/proof.md reports/proof-repos.txt proof-state.sqlite.zst proof-state.sqlite.zst.sha256 --clobber
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Check deployed static endpoints
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          curl --fail --show-error --location --head "$PAGES_URL/api/v1/manifest.json"
+          curl --fail --show-error --location "$PAGES_URL/api/v1/manifest.json"

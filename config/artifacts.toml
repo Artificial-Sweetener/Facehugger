@@ -1,0 +1,21 @@
+[artifacts]
+extensions = [
+    ".safetensors",
+    ".gguf",
+    ".ggml",
+    ".bin",
+    ".pt",
+    ".pth",
+    ".ckpt",
+    ".onnx",
+    ".pb",
+    ".tflite",
+    ".h5",
+    ".keras",
+    ".msgpack",
+    ".npz",
+    ".npy",
+    ".params",
+    ".ot",
+    ".mlmodel",
+]

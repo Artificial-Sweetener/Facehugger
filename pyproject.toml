@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "facehugger"
+version = "0.0.0"
+description = "Exact reverse lookup for Hugging Face model artifact hashes."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+dependencies = [
+    "httpx>=0.28",
+    "huggingface-hub>=1.2",
+    "platformdirs>=4.3",
+    "zstandard>=0.23",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+
+[project.scripts]
+facehugger = "facehugger.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/facehugger"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.400",
+    "pytest>=8.3",
+    "ruff>=0.12",
+]
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["DESIGN.md", "site"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["facehugger"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["site"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "error"

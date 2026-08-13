@@ -1,0 +1,27 @@
+name: Full crawl
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: facehugger-state
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require owner approval
+        env:
+          FACEHUGGER_FULL_CRAWL_APPROVED: ${{ vars.FACEHUGGER_FULL_CRAWL_APPROVED }}
+        run: |
+          test "$FACEHUGGER_FULL_CRAWL_APPROVED" = "true" || {
+            echo "Full crawl is disabled pending the Phase 0 Stop and Look review."
+            exit 0
+          }
+          echo "Full crawl approval is present; no full crawler is implemented in Phase 0."

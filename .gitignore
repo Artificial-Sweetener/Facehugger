@@ -1,0 +1,57 @@
+# Python bytecode and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python environments and build artifacts
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated index state and published output
+site/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
+*.sqlite.zst
+*.sqlite.zst.sha256
+.facehugger/
+fixtures/downloaded/
+fixtures/local-hashes.txt
+reports/proof.json
+reports/proof.md
+reports/runs/
+reports/benchmarks/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.code-workspace
+Thumbs.db
+Desktop.ini
+.DS_Store
