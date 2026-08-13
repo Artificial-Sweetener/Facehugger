@@ -11,7 +11,9 @@ from platformdirs import user_cache_dir
 
 from facehugger.client import FacehuggerClient
 from facehugger.errors import FacehuggerError
+from facehugger.indexer.benchmarks import update_deployment_measurements
 from facehugger.indexer.proof import run_proof
+from facehugger.indexer.reports import write_proof_reports
 
 
 def main() -> int:
@@ -35,6 +37,10 @@ def main() -> int:
     proof.add_argument("--root", type=Path, default=Path.cwd())
     proof.add_argument("--version", required=True)
     proof.add_argument("--catalog-limit", type=int)
+    measure_pages = commands.add_parser("measure-pages")
+    measure_pages.add_argument("--report", type=Path, default=Path("reports/proof.json"))
+    measure_pages.add_argument("--pages-url", required=True)
+    measure_pages.add_argument("--digest", required=True)
     arguments = parser.parse_args()
     try:
         if arguments.command == "lookup":
@@ -43,6 +49,8 @@ def main() -> int:
             return _clear_cache()
         if arguments.command == "index":
             return _index_status(arguments)
+        if arguments.command == "measure-pages":
+            return _measure_pages(arguments)
         token = os.environ["HF_TOKEN"]
         run_proof(
             root=arguments.root,
@@ -88,4 +96,11 @@ def _index_status(arguments: argparse.Namespace) -> int:
     """Print the current index metadata."""
     index = FacehuggerClient(base_url=arguments.base_url, offline=arguments.offline).index_info()
     print(json.dumps(index.__dict__, default=str, sort_keys=True))
+    return 0
+
+
+def _measure_pages(arguments: argparse.Namespace) -> int:
+    """Record deployed client and CORS measurements in the proof report."""
+    report = update_deployment_measurements(arguments.report, arguments.pages_url, arguments.digest)
+    write_proof_reports(arguments.report.parent, report)
     return 0

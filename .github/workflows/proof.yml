@@ -43,16 +43,6 @@ jobs:
         run: >-
           uv run facehugger proof --root . --version "${{ inputs.version }}"
           ${{ inputs.catalog_limit && format('--catalog-limit {0}', inputs.catalog_limit) || '' }}
-      - name: Package immutable proof state
-        run: |
-          zstd --quiet --force .facehugger/proof.sqlite -o proof-state.sqlite.zst
-          sha256sum proof-state.sqlite.zst > proof-state.sqlite.zst.sha256
-      - name: Publish proof evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create phase-0-proof --prerelease --title "Phase 0 proof" --notes "Bounded Phase 0 evidence." || true
-          gh release upload phase-0-proof reports/proof.json reports/proof.md reports/proof-repos.txt proof-state.sqlite.zst proof-state.sqlite.zst.sha256 --clobber
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
@@ -64,3 +54,19 @@ jobs:
         run: |
           curl --fail --show-error --location --head "$PAGES_URL/api/v1/manifest.json"
           curl --fail --show-error --location "$PAGES_URL/api/v1/manifest.json"
+      - name: Measure deployed client contract
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          digest="$(jq -r '.verification_downloads[0].reported_sha256' reports/proof.json)"
+          uv run facehugger measure-pages --pages-url "$PAGES_URL" --digest "$digest"
+      - name: Package immutable proof state
+        run: |
+          zstd --quiet --force .facehugger/proof.sqlite -o proof-state.sqlite.zst
+          sha256sum proof-state.sqlite.zst > proof-state.sqlite.zst.sha256
+      - name: Publish proof evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create phase-0-proof --prerelease --title "Phase 0 proof" --notes "Bounded Phase 0 evidence." || true
+          gh release upload phase-0-proof reports/proof.json reports/proof.md reports/proof-repos.txt proof-state.sqlite.zst proof-state.sqlite.zst.sha256 --clobber

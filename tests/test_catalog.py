@@ -1,6 +1,6 @@
 """Deterministic bounded proof-corpus tests."""
 
-from facehugger.indexer.catalog import select_proof_repos
+from facehugger.indexer.catalog import select_proof_corpus, select_proof_repos
 from facehugger.models import CatalogRepo
 
 
@@ -36,3 +36,29 @@ def test_proof_selection_is_bounded_deterministic_and_includes_gated_public_repo
     )
     assert "owner/model-0" in selected
     assert len(selected) <= 9
+
+
+def test_proof_corpus_records_mutually_exclusive_selection_sources() -> None:
+    """The review report can account for every selected proof repository."""
+    catalog = tuple(
+        CatalogRepo(
+            repo_id=f"owner/model-{index}",
+            revision=None,
+            last_modified=None,
+            downloads=index,
+            private=False,
+            gated=False,
+            sibling_paths=("model.safetensors",),
+        )
+        for index in range(12)
+    )
+    corpus = select_proof_corpus(
+        catalog,
+        (".safetensors",),
+        ("owner/extra",),
+        popular_limit=3,
+        random_limit=3,
+        targeted_limit=3,
+    )
+    assert sum(corpus.composition.values()) == len(corpus.repositories)
+    assert corpus.composition["extra"] == 1
