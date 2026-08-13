@@ -17,6 +17,7 @@ from huggingface_hub import (
 from huggingface_hub.hf_api import ModelInfo
 
 from facehugger.filters import is_candidate_artifact
+from facehugger.hashes import normalize_sha256, sha256_bytes
 from facehugger.indexer.catalog import select_proof_repos
 from facehugger.indexer.metadata_sources import (
     InspectionMeasurement,
@@ -351,6 +352,9 @@ def _report(
             "pages_size_bytes": None,
         },
         "verification_downloads": metrics.verification,
+        "provided_hash_lookups": _provided_hash_lookups(
+            root / "fixtures" / "local-hashes.txt", state
+        ),
         "known_limitations": [
             "The proof index is incomplete and a no-match is not definitive.",
             "Pages deployment measurements are populated only after the proof workflow deploys.",
@@ -407,6 +411,26 @@ def _extra_repos(path: Path) -> tuple[str, ...]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     )
+
+
+def _provided_hash_lookups(path: Path, state: IndexState) -> list[dict[str, object]] | None:
+    if not path.exists():
+        return None
+    results: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        digest = normalize_sha256(value)
+        results.append(
+            {
+                "digest": digest,
+                "matches": [
+                    occurrence.__dict__ for occurrence in state.lookup(sha256_bytes(digest))
+                ],
+            }
+        )
+    return results
 
 
 def _file_sha256(path: Path) -> str:
