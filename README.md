@@ -17,7 +17,7 @@ thumbnail directly from the Hub, or use the resolver URL directly.
 persists the Hub pagination continuation and catalog observations before any
 metadata inspection, then inspects only repositories that are new, revision
 changed, or whose indexed gate state changed. Each invocation enumerates at
-most 1,000 catalog pages and inspects at most 8,000 repositories, leaving time
+most 1,000 catalog pages and inspects at most 25,000 repositories, leaving time
 to publish durable state before the workflow deadline. A complete catalog
 generation reconciles repositories no longer returned by the Hub. Each
 replacement is atomic, so interrupted runs retain the prior verified records.

@@ -6,7 +6,7 @@ on:
       inspection_limit:
         description: Maximum changed repositories to inspect in this bounded invocation
         required: false
-        default: "8000"
+        default: "25000"
         type: string
       catalog_page_limit:
         description: Maximum model-catalog pages to enumerate in this bounded invocation
@@ -28,7 +28,7 @@ concurrency:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     environment:
       name: github-pages
     steps:
@@ -55,7 +55,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           INDEX_VERSION: full-${{ github.run_id }}
         run: |
-          uv run facehugger crawl --root . --version "$INDEX_VERSION" --catalog-page-limit "${{ inputs.catalog_page_limit || '1000' }}" --inspection-limit "${{ inputs.inspection_limit || '8000' }}" | tee crawl-output.json
+          uv run facehugger crawl --root . --version "$INDEX_VERSION" --catalog-page-limit "${{ inputs.catalog_page_limit || '1000' }}" --inspection-limit "${{ inputs.inspection_limit || '25000' }}" | tee crawl-output.json
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
       - name: Package durable crawler state
         if: always() && hashFiles('.facehugger/full.sqlite') != ''
