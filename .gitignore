@@ -46,6 +46,7 @@ fixtures/local-hashes.txt
 reports/proof.json
 reports/proof.md
 reports/full-crawl.json
+reports/full-crawl-*-badge.json
 reports/runs/
 reports/benchmarks/
 

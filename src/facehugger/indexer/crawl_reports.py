@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from facehugger.indexer.rate_limit import RequestMetrics
 
@@ -54,6 +54,18 @@ def write_full_crawl_report(
             "brightgreen" if progress.pending_repositories == 0 else "orange",
         ),
     )
+
+
+def write_full_crawl_status_badge(root: Path, status: Literal["failed", "idle", "running"]) -> None:
+    """Write the Shields-compatible badge record for the current crawl state."""
+    reports = root / "reports"
+    reports.mkdir(exist_ok=True)
+    message, color = {
+        "failed": ("failed", "red"),
+        "idle": ("idle", "brightgreen"),
+        "running": ("running", "007ec6"),
+    }[status]
+    _write_json(reports / "full-crawl-status-badge.json", _badge("crawl", message, color))
 
 
 def _badge(label: str, message: str, color: str) -> dict[str, int | str]:

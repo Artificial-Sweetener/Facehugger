@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from facehugger.indexer.crawl import CrawlProgress
-from facehugger.indexer.crawl_reports import write_full_crawl_report
+from facehugger.indexer.crawl_reports import write_full_crawl_report, write_full_crawl_status_badge
 from facehugger.indexer.rate_limit import RequestMetrics
 
 
@@ -45,5 +45,21 @@ def test_full_crawl_report_exposes_matching_inspection_progress_badges(tmp_path:
         "color": "orange",
         "label": "remaining",
         "message": "55",
+        "schemaVersion": 1,
+    }
+
+
+def test_full_crawl_status_badge_represents_an_active_crawl(tmp_path: Path) -> None:
+    """The workflow can publish an explicit running state before inspection begins."""
+    write_full_crawl_status_badge(tmp_path, "running")
+
+    status = json.loads(
+        (tmp_path / "reports" / "full-crawl-status-badge.json").read_text(encoding="utf-8")
+    )
+
+    assert status == {
+        "color": "007ec6",
+        "label": "crawl",
+        "message": "running",
         "schemaVersion": 1,
     }

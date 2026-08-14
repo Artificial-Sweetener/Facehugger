@@ -10,7 +10,10 @@ import httpx
 from huggingface_hub import HfApi
 
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
-from facehugger.indexer.crawl_reports import write_full_crawl_report
+from facehugger.indexer.crawl_reports import (
+    write_full_crawl_report,
+    write_full_crawl_status_badge,
+)
 from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 from facehugger.indexer.rate_limit import RateController, RequestMetrics
@@ -125,6 +128,7 @@ def run_full_crawl(
             published=published,
         )
         write_full_crawl_report(root, progress, metrics)
+        write_full_crawl_status_badge(root, "idle")
         return progress
     finally:
         catalog_client.close()

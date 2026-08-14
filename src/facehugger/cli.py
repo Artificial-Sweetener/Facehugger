@@ -17,6 +17,7 @@ from facehugger.indexer.crawl import (
     DEFAULT_INSPECTION_LIMIT,
     run_full_crawl,
 )
+from facehugger.indexer.crawl_reports import write_full_crawl_status_badge
 from facehugger.indexer.proof import run_proof
 from facehugger.indexer.reports import write_proof_reports
 
@@ -47,6 +48,9 @@ def main() -> int:
     crawl.add_argument("--version", required=True)
     crawl.add_argument("--catalog-page-limit", type=int, default=DEFAULT_CATALOG_PAGE_LIMIT)
     crawl.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
+    crawl_status = commands.add_parser("crawl-status")
+    crawl_status.add_argument("--root", type=Path, default=Path.cwd())
+    crawl_status.add_argument("--status", choices=("failed", "idle", "running"), required=True)
     measure_pages = commands.add_parser("measure-pages")
     measure_pages.add_argument("--report", type=Path, default=Path("reports/proof.json"))
     measure_pages.add_argument("--pages-url", required=True)
@@ -70,6 +74,9 @@ def main() -> int:
                 inspection_limit=arguments.inspection_limit,
             )
             print(json.dumps(progress.as_dict(), sort_keys=True))
+            return 0
+        if arguments.command == "crawl-status":
+            write_full_crawl_status_badge(arguments.root, arguments.status)
             return 0
         token = os.environ["HF_TOKEN"]
         run_proof(

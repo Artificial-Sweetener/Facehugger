@@ -1,0 +1,34 @@
+name: Publish crawl badges
+description: Publish generated README badge data to the dedicated public branch.
+inputs:
+  github-token:
+    description: Token authorized to update the badge-data branch.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        badge_dir="$(mktemp -d)"
+        rmdir "$badge_dir"
+        git fetch origin badge-data || true
+        if git show-ref --verify --quiet refs/remotes/origin/badge-data; then
+          git worktree add --detach "$badge_dir" origin/badge-data
+          (cd "$badge_dir" && git switch -c badge-data --track origin/badge-data)
+        else
+          git worktree add --detach "$badge_dir"
+          (
+            cd "$badge_dir"
+            git switch --orphan badge-data
+            git rm --force -r .
+          )
+        fi
+        cp reports/full-crawl-*-badge.json "$badge_dir"/
+        (
+          cd "$badge_dir"
+          git add full-crawl-*-badge.json
+          git diff --cached --quiet || git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "chore: update crawl badges"
+          git push origin HEAD:badge-data
+        )

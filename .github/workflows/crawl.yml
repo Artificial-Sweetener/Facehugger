@@ -49,6 +49,13 @@ jobs:
           gh release download full-crawl-state --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger || true
           test ! -f .facehugger/full.sqlite.zst || (cd .facehugger && sha256sum --check full.sqlite.zst.sha256)
           test ! -f .facehugger/full.sqlite.zst || zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
+      - name: Mark crawl as running
+        run: uv run facehugger crawl-status --root . --status running
+      - name: Publish README badge data
+        if: always() && hashFiles('reports/full-crawl-*-badge.json') != ''
+        uses: ./.github/actions/publish-crawl-badges
+        with:
+          github-token: ${{ github.token }}
       - id: crawl
         name: Advance resumable full crawl
         env:
@@ -57,6 +64,9 @@ jobs:
         run: |
           uv run facehugger crawl --root . --version "$INDEX_VERSION" --catalog-page-limit "${{ inputs.catalog_page_limit || '1000' }}" --inspection-limit "${{ inputs.inspection_limit || '25000' }}" | tee crawl-output.json
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
+      - name: Mark crawl as failed
+        if: failure() || cancelled()
+        run: uv run facehugger crawl-status --root . --status failed
       - name: Package durable crawler state
         if: always() && hashFiles('.facehugger/full.sqlite') != ''
         run: |
@@ -74,6 +84,11 @@ jobs:
             test ! -f "$report" || assets+=("$report")
           done
           gh release upload full-crawl-state "${assets[@]}" --clobber
+      - name: Publish completed README badge data
+        if: always() && hashFiles('reports/full-crawl-*-badge.json') != ''
+        uses: ./.github/actions/publish-crawl-badges
+        with:
+          github-token: ${{ github.token }}
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:
