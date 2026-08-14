@@ -20,7 +20,8 @@ from facehugger.state import IndexState
 CATALOG_URL = "https://huggingface.co/api/models"
 CATALOG_PAGE_SIZE = 100
 CRAWL_REQUESTS_PER_MINUTE = 100
-DEFAULT_INSPECTION_LIMIT = 25_000
+DEFAULT_CATALOG_PAGE_LIMIT = 1_000
+DEFAULT_INSPECTION_LIMIT = 8_000
 MAX_PUBLISHED_SITE_BYTES = 900 * 1024 * 1024
 CATALOG_RETRY_ATTEMPTS = 3
 
@@ -65,7 +66,7 @@ def run_full_crawl(
     root: Path,
     token: str,
     version: str,
-    catalog_page_limit: int | None = None,
+    catalog_page_limit: int | None = DEFAULT_CATALOG_PAGE_LIMIT,
     inspection_limit: int = DEFAULT_INSPECTION_LIMIT,
 ) -> CrawlProgress:
     """Advance one crash-safe catalog generation and stage a complete index when ready."""

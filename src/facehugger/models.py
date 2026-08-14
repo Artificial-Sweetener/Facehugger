@@ -6,11 +6,12 @@ from typing import Literal
 from urllib.parse import quote
 
 HUGGING_FACE_HUB_URL = "https://huggingface.co"
+HUGGING_FACE_THUMBNAIL_URL = "https://cdn-thumbnails.huggingface.co/social-thumbnails/models"
 
 
 @dataclass(frozen=True)
 class Occurrence:
-    """One repository occurrence and its locally derived Hub links."""
+    """One repository occurrence and its locally derived Hub presentation links."""
 
     repo_id: str
     path: str
@@ -32,6 +33,11 @@ class Occurrence:
             f"{quote(self.path, safe='/')}"
         )
 
+    @property
+    def thumbnail_url(self) -> str:
+        """Return the Hub-hosted social thumbnail URL without a network request."""
+        return f"{HUGGING_FACE_THUMBNAIL_URL}/{quote(self.repo_id, safe='/')}.png"
+
     def as_dict(self) -> dict[str, str | int | bool | None]:
         """Return the complete public occurrence contract for JSON consumers."""
         return {
@@ -43,6 +49,7 @@ class Occurrence:
             "gated": self.gated,
             "repository_url": self.repository_url,
             "resolver_url": self.resolver_url,
+            "thumbnail_url": self.thumbnail_url,
         }
 
 

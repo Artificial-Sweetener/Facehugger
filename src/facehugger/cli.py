@@ -12,7 +12,11 @@ from platformdirs import user_cache_dir
 from facehugger.client import FacehuggerClient
 from facehugger.errors import FacehuggerError
 from facehugger.indexer.benchmarks import update_deployment_measurements
-from facehugger.indexer.crawl import run_full_crawl
+from facehugger.indexer.crawl import (
+    DEFAULT_CATALOG_PAGE_LIMIT,
+    DEFAULT_INSPECTION_LIMIT,
+    run_full_crawl,
+)
 from facehugger.indexer.proof import run_proof
 from facehugger.indexer.reports import write_proof_reports
 
@@ -41,8 +45,8 @@ def main() -> int:
     crawl = commands.add_parser("crawl")
     crawl.add_argument("--root", type=Path, default=Path.cwd())
     crawl.add_argument("--version", required=True)
-    crawl.add_argument("--catalog-page-limit", type=int)
-    crawl.add_argument("--inspection-limit", type=int, default=25_000)
+    crawl.add_argument("--catalog-page-limit", type=int, default=DEFAULT_CATALOG_PAGE_LIMIT)
+    crawl.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
     measure_pages = commands.add_parser("measure-pages")
     measure_pages.add_argument("--report", type=Path, default=Path("reports/proof.json"))
     measure_pages.add_argument("--pages-url", required=True)

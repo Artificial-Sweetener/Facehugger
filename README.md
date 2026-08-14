@@ -3,20 +3,24 @@
 Facehugger is a Python utility for exact reverse lookup of Hugging Face model
 artifact SHA-256 digests.
 
-Each exact match includes the repository page and a revision-pinned Hugging Face
-file resolver URL. Both links are derived locally from the indexed repository,
-revision, and file path; lookup does not call a Hugging Face API. Matches also
-carry the public gate state observed while indexed. Applications can present a
-gated repository page to the user or use the resolver URL directly.
+Each exact match includes the repository page, a revision-pinned Hugging Face
+file resolver URL, and the Hub-hosted social thumbnail URL for its repository.
+Facehugger derives these links locally from indexed repository, revision, and
+file-path data; lookup does not call a Hugging Face API or store thumbnail
+images. Matches also carry the public gate state observed while indexed.
+Applications can present a gated repository page to the user, load the
+thumbnail directly from the Hub, or use the resolver URL directly.
 
 ## Index operations
 
 `facehugger crawl` advances a durable, generation-based public-model crawl. It
 persists the Hub pagination continuation and catalog observations before any
 metadata inspection, then inspects only repositories that are new, revision
-changed, or whose indexed gate state changed. A complete catalog generation
-reconciles repositories no longer returned by the Hub. Each replacement is
-atomic, so interrupted runs retain the prior verified records.
+changed, or whose indexed gate state changed. Each invocation enumerates at
+most 1,000 catalog pages and inspects at most 8,000 repositories, leaving time
+to publish durable state before the workflow deadline. A complete catalog
+generation reconciles repositories no longer returned by the Hub. Each
+replacement is atomic, so interrupted runs retain the prior verified records.
 
 The crawler stages a new complete static index only after the catalog is fully
 enumerated and no pending inspections remain. Compilation chooses a three- or

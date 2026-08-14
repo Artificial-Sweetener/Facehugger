@@ -52,6 +52,10 @@ def test_client_fetches_only_manifest_and_derived_shard_then_uses_cache(
         result.matches[0].resolver_url
         == "https://huggingface.co/example/model/resolve/" + "1" * 40 + "/model.safetensors"
     )
+    assert (
+        result.matches[0].thumbnail_url
+        == "https://cdn-thumbnails.huggingface.co/social-thumbnails/models/example/model.png"
+    )
     assert result.matches[0].as_dict()["gated"] is True
     assert client.index_info().version == "proof"
     assert requests == [
