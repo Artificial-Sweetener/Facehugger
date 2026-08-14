@@ -174,6 +174,20 @@ class IndexState:
             ).fetchone()[0]
         )
 
+    def eligible_repository_count(self) -> int:
+        """Return the number of cataloged repositories eligible for hash inspection."""
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM repos WHERE eligible = 1").fetchone()[0]
+        )
+
+    def indexed_repository_count(self) -> int:
+        """Return the number of eligible repositories with verified current metadata."""
+        return int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM repos WHERE eligible = 1 AND status = 'indexed'"
+            ).fetchone()[0]
+        )
+
     def record_inspection_failure(self, repo_id: str) -> None:
         """Record a recoverable inspection failure without disturbing verified occurrences."""
         now = datetime.now(UTC).isoformat()

@@ -10,6 +10,7 @@ import httpx
 from huggingface_hub import HfApi
 
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
+from facehugger.indexer.crawl_reports import write_full_crawl_report
 from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 from facehugger.indexer.rate_limit import RateController, RequestMetrics
@@ -44,6 +45,8 @@ class CrawlProgress:
     catalog_stalled: bool
     cataloged_repositories: int
     inspections: int
+    eligible_repositories: int
+    indexed_repositories: int
     pending_repositories: int
     published: bool
 
@@ -56,6 +59,8 @@ class CrawlProgress:
             "catalog_stalled": self.catalog_stalled,
             "cataloged_repositories": self.cataloged_repositories,
             "inspections": self.inspections,
+            "eligible_repositories": self.eligible_repositories,
+            "indexed_repositories": self.indexed_repositories,
             "pending_repositories": self.pending_repositories,
             "published": self.published,
         }
@@ -107,30 +112,20 @@ def run_full_crawl(
             _compile_staged_site(state, root, version)
             state.complete_catalog_generation()
             published = True
-        _write_progress(
-            root,
-            CrawlProgress(
-                generation=generation,
-                catalog_pages=catalog_page_count,
-                catalog_complete=catalog_complete,
-                catalog_stalled=catalog_stalled,
-                cataloged_repositories=_cataloged_count(state, generation),
-                inspections=inspections,
-                pending_repositories=pending,
-                published=published,
-            ),
-            metrics,
-        )
-        return CrawlProgress(
+        progress = CrawlProgress(
             generation=generation,
             catalog_pages=catalog_page_count,
             catalog_complete=catalog_complete,
             catalog_stalled=catalog_stalled,
             cataloged_repositories=_cataloged_count(state, generation),
             inspections=inspections,
+            eligible_repositories=state.eligible_repository_count(),
+            indexed_repositories=state.indexed_repository_count(),
             pending_repositories=pending,
             published=published,
         )
+        write_full_crawl_report(root, progress, metrics)
+        return progress
     finally:
         catalog_client.close()
         state.close()
@@ -337,16 +332,4 @@ def _cataloged_count(state: IndexState, generation: int) -> int:
         state.connection.execute(
             "SELECT COUNT(*) FROM repos WHERE catalog_generation = ?", (generation,)
         ).fetchone()[0]
-    )
-
-
-def _write_progress(root: Path, progress: CrawlProgress, metrics: RequestMetrics) -> None:
-    """Write safe crawl progress that can be published without request details or credentials."""
-    import json
-
-    reports = root / "reports"
-    reports.mkdir(exist_ok=True)
-    payload = {**progress.as_dict(), "requests": metrics.requests, "statuses": metrics.statuses}
-    (reports / "full-crawl.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

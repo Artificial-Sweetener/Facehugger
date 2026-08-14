@@ -70,7 +70,9 @@ jobs:
         run: |
           gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state." || true
           assets=(.facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256)
-          test ! -f reports/full-crawl.json || assets+=(reports/full-crawl.json)
+          for report in reports/full-crawl.json reports/full-crawl-*-badge.json; do
+            test ! -f "$report" || assets+=("$report")
+          done
           gh release upload full-crawl-state "${assets[@]}" --clobber
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'

@@ -134,11 +134,15 @@ def test_changed_catalog_revision_is_the_only_reinspection_candidate(tmp_path: P
         state.record_catalog_repo(repo, eligible=True, generation=generation)
         state.replace_repo(inspected, ())
         assert state.pending_repositories(1) == ()
+        assert state.eligible_repository_count() == 1
+        assert state.indexed_repository_count() == 1
 
         changed = CatalogRepo("example/model", "2" * 40, None, 1, False, True, ("model.bin",))
         state.record_catalog_repo(changed, eligible=True, generation=generation)
         pending = state.pending_repositories(1)
         assert pending[0].revision == "2" * 40
         assert pending[0].gated is True
+        assert state.eligible_repository_count() == 1
+        assert state.indexed_repository_count() == 1
     finally:
         state.close()

@@ -1,5 +1,9 @@
 # Facehugger
 
+[![Full crawl status](https://github.com/Artificial-Sweetener/Facehugger/actions/workflows/crawl.yml/badge.svg)](https://github.com/Artificial-Sweetener/Facehugger/actions/workflows/crawl.yml)
+[![Eligible repositories inspected](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FArtificial-Sweetener%2FFacehugger%2Freleases%2Fdownload%2Ffull-crawl-state%2Ffull-crawl-inspected-badge.json&cacheSeconds=300)](https://github.com/Artificial-Sweetener/Facehugger/releases/tag/full-crawl-state)
+[![Eligible repositories remaining](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FArtificial-Sweetener%2FFacehugger%2Freleases%2Fdownload%2Ffull-crawl-state%2Ffull-crawl-remaining-badge.json&cacheSeconds=300)](https://github.com/Artificial-Sweetener/Facehugger/releases/tag/full-crawl-state)
+
 Facehugger is a Python utility for exact reverse lookup of Hugging Face model
 artifact SHA-256 digests.
 
@@ -29,6 +33,10 @@ workflow preserves its compressed SQLite state in the `full-crawl-state`
 prerelease between bounded GitHub Actions invocations, then deploys only a
 complete staged index. Publication also refuses a staged site larger than
 900 MiB, below the GitHub Pages 1 GiB limit.
+
+The README badges show the live GitHub Actions crawl state plus the latest
+durable count of eligible repositories inspected and remaining. The count
+badges update whenever a batch checkpoints its verified state.
 
 ## Development
 
