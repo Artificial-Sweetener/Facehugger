@@ -61,7 +61,7 @@ jobs:
         if: always() && hashFiles('.facehugger/full.sqlite') != ''
         run: |
           zstd --quiet --force .facehugger/full.sqlite -o .facehugger/full.sqlite.zst
-          sha256sum .facehugger/full.sqlite.zst > .facehugger/full.sqlite.zst.sha256
+          (cd .facehugger && sha256sum full.sqlite.zst > full.sqlite.zst.sha256)
           test "$(stat --printf='%s' .facehugger/full.sqlite.zst)" -le 1900000000
       - name: Publish durable crawler state and progress
         if: always() && hashFiles('.facehugger/full.sqlite.zst') != ''
