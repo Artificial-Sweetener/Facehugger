@@ -16,7 +16,6 @@ runs:
         git fetch origin badge-data || true
         if git show-ref --verify --quiet refs/remotes/origin/badge-data; then
           git worktree add --detach "$badge_dir" origin/badge-data
-          (cd "$badge_dir" && git switch -c badge-data --track origin/badge-data)
         else
           git worktree add --detach "$badge_dir"
           (
