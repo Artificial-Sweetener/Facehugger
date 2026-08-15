@@ -34,6 +34,9 @@ prerelease between bounded GitHub Actions invocations, then deploys only a
 complete staged index. Publication also refuses a staged site larger than
 900 MiB, below the GitHub Pages 1 GiB limit.
 
+After each successful incomplete checkpoint, the workflow queues the next
+bounded invocation itself. The scheduled workflow is a recovery backstop.
+
 The README badges show the current crawl state plus the latest durable count of
 eligible repositories inspected and remaining. The state badge updates when a
 batch starts, completes, or fails; the count badges update whenever a batch

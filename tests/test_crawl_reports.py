@@ -35,6 +35,7 @@ def test_full_crawl_report_exposes_matching_inspection_progress_badges(tmp_path:
     )
     assert report["eligible_repositories"] == 80
     assert report["indexed_repositories"] == 25
+    assert report["next_invocation_ready"] is True
     assert inspected == {
         "color": "007ec6",
         "label": "eligible inspected",

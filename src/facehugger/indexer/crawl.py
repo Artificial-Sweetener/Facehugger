@@ -53,6 +53,11 @@ class CrawlProgress:
     pending_repositories: int
     published: bool
 
+    @property
+    def next_invocation_ready(self) -> bool:
+        """Return whether a completed invocation can immediately continue the crawl."""
+        return not self.published and not self.catalog_stalled
+
     def as_dict(self) -> dict[str, int | bool]:
         """Return a stable JSON-safe progress record."""
         return {
@@ -66,6 +71,7 @@ class CrawlProgress:
             "indexed_repositories": self.indexed_repositories,
             "pending_repositories": self.pending_repositories,
             "published": self.published,
+            "next_invocation_ready": self.next_invocation_ready,
         }
 
 

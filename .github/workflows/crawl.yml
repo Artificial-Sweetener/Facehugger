@@ -1,6 +1,15 @@
 name: Full crawl
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/actions/publish-crawl-badges/**
+      - .github/workflows/crawl.yml
+      - pyproject.toml
+      - src/facehugger/**
+      - uv.lock
   workflow_dispatch:
     inputs:
       inspection_limit:
@@ -17,6 +26,7 @@ on:
     - cron: "17 3 * * *"
 
 permissions:
+  actions: write
   contents: write
   pages: write
   id-token: write
@@ -64,6 +74,7 @@ jobs:
         run: |
           uv run facehugger crawl --root . --version "$INDEX_VERSION" --catalog-page-limit "${{ inputs.catalog_page_limit || '1000' }}" --inspection-limit "${{ inputs.inspection_limit || '25000' }}" | tee crawl-output.json
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
+          echo "continue=$(jq -r '.next_invocation_ready' crawl-output.json)" >> "$GITHUB_OUTPUT"
       - name: Mark crawl as failed
         if: failure() || cancelled()
         run: uv run facehugger crawl-status --root . --status failed
@@ -89,6 +100,12 @@ jobs:
         uses: ./.github/actions/publish-crawl-badges
         with:
           github-token: ${{ github.token }}
+      - name: Queue next incomplete crawl
+        if: success() && steps.crawl.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run crawl.yml --ref "$GITHUB_SHA" --field catalog_page_limit="${{ inputs.catalog_page_limit || '1000' }}" --field inspection_limit="${{ inputs.inspection_limit || '25000' }}"
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:
