@@ -105,7 +105,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run crawl.yml --ref "$GITHUB_SHA" --field catalog_page_limit="${{ inputs.catalog_page_limit || '1000' }}" --field inspection_limit="${{ inputs.inspection_limit || '25000' }}"
+          gh workflow run crawl.yml --ref main --field catalog_page_limit="${{ inputs.catalog_page_limit || '1000' }}" --field inspection_limit="${{ inputs.inspection_limit || '25000' }}"
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:
