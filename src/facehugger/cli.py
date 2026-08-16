@@ -13,8 +13,7 @@ from facehugger.client import FacehuggerClient
 from facehugger.errors import FacehuggerError
 from facehugger.indexer.benchmarks import update_deployment_measurements
 from facehugger.indexer.crawl import (
-    DEFAULT_CATALOG_PAGE_LIMIT,
-    DEFAULT_INSPECTION_LIMIT,
+    DEFAULT_CRAWL_TIME_LIMIT_MINUTES,
     run_full_crawl,
 )
 from facehugger.indexer.crawl_reports import write_full_crawl_status_badge
@@ -46,8 +45,12 @@ def main() -> int:
     crawl = commands.add_parser("crawl")
     crawl.add_argument("--root", type=Path, default=Path.cwd())
     crawl.add_argument("--version", required=True)
-    crawl.add_argument("--catalog-page-limit", type=int, default=DEFAULT_CATALOG_PAGE_LIMIT)
-    crawl.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
+    crawl.add_argument(
+        "--time-limit-minutes",
+        type=int,
+        default=DEFAULT_CRAWL_TIME_LIMIT_MINUTES,
+        help="Maximum duration for this resumable crawl invocation.",
+    )
     crawl_status = commands.add_parser("crawl-status")
     crawl_status.add_argument("--root", type=Path, default=Path.cwd())
     crawl_status.add_argument("--status", choices=("failed", "idle", "running"), required=True)
@@ -70,8 +73,7 @@ def main() -> int:
                 root=arguments.root,
                 token=os.environ["HF_TOKEN"],
                 version=arguments.version,
-                catalog_page_limit=arguments.catalog_page_limit,
-                inspection_limit=arguments.inspection_limit,
+                time_limit_minutes=arguments.time_limit_minutes,
             )
             print(json.dumps(progress.as_dict(), sort_keys=True))
             return 0

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from typing import Any, Protocol, cast
 
 import httpx
@@ -24,8 +24,8 @@ from facehugger.state import IndexState
 CATALOG_URL = "https://huggingface.co/api/models"
 CATALOG_PAGE_SIZE = 100
 CRAWL_REQUESTS_PER_MINUTE = 100
-DEFAULT_CATALOG_PAGE_LIMIT = 1_000
-DEFAULT_INSPECTION_LIMIT = 25_000
+DEFAULT_CRAWL_TIME_LIMIT_MINUTES = 270
+PENDING_REPOSITORY_PAGE_SIZE = 1_000
 MAX_PUBLISHED_SITE_BYTES = 900 * 1024 * 1024
 CATALOG_RETRY_ATTEMPTS = 3
 
@@ -80,19 +80,17 @@ def run_full_crawl(
     root: Path,
     token: str,
     version: str,
-    catalog_page_limit: int | None = DEFAULT_CATALOG_PAGE_LIMIT,
-    inspection_limit: int = DEFAULT_INSPECTION_LIMIT,
+    time_limit_minutes: int = DEFAULT_CRAWL_TIME_LIMIT_MINUTES,
 ) -> CrawlProgress:
     """Advance one crash-safe catalog generation and stage a complete index when ready."""
-    if catalog_page_limit is not None and catalog_page_limit <= 0:
-        raise ValueError("Catalog page limit must be positive.")
-    if inspection_limit <= 0:
-        raise ValueError("Inspection limit must be positive.")
+    if time_limit_minutes <= 0:
+        raise ValueError("Crawl time limit must be positive.")
     state_path = root / ".facehugger" / "full.sqlite"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state = IndexState(state_path)
     metrics = RequestMetrics()
     controller = RateController(CRAWL_REQUESTS_PER_MINUTE)
+    deadline = monotonic() + time_limit_minutes * 60
     configure_hub_http(metrics, controller)
     api = create_hub_api(token)
     extensions = load_artifact_extensions(root / "config" / "artifacts.toml")
@@ -106,13 +104,13 @@ def run_full_crawl(
                 catalog_client,
                 extensions,
                 generation,
-                catalog_page_limit,
+                deadline,
             )
         else:
             catalog_stalled = False
         inspections = 0
         if state.catalog_generation_complete() and not catalog_stalled:
-            inspections = _inspect_pending(state, api, extensions, inspection_limit)
+            inspections = _inspect_pending(state, api, extensions, deadline)
         catalog_complete = state.catalog_generation_complete()
         pending = state.pending_repository_count()
         published = False
@@ -170,12 +168,12 @@ def advance_catalog(
     client: CatalogClient,
     extensions: tuple[str, ...],
     generation: int,
-    page_limit: int | None,
+    deadline: float,
 ) -> tuple[int, bool]:
-    """Persist catalog pages until exhausted or the invocation's page budget is reached."""
+    """Persist catalog pages until exhausted or the invocation deadline is reached."""
     next_url = state.get_metadata("catalog_next_url")
     pages = 0
-    while page_limit is None or pages < page_limit:
+    while monotonic() < deadline:
         response = _catalog_response(
             client,
             CATALOG_URL if next_url is None else next_url,
@@ -298,21 +296,31 @@ def _eligible(repo: CatalogRepo, extensions: tuple[str, ...]) -> bool:
     )
 
 
-def _inspect_pending(state: IndexState, api: HfApi, extensions: tuple[str, ...], limit: int) -> int:
-    """Inspect and atomically replace one bounded batch of changed repositories."""
+def _inspect_pending(
+    state: IndexState, api: HfApi, extensions: tuple[str, ...], deadline: float
+) -> int:
+    """Inspect and atomically replace pending repositories until the invocation deadline."""
     source = ModelInfoMetadataSource(api)
     inspected = 0
-    for pending in state.pending_repositories(limit):
-        try:
-            result, _ = source.inspect_repo(pending.repo_id, pending.revision)
-        except Exception:
-            state.record_inspection_failure(pending.repo_id)
-            continue
-        candidates = tuple(
-            file for file in result.files if is_candidate_artifact(file.path, extensions)
-        )
-        state.replace_repo(result, candidates)
-        inspected += 1
+    cursor: str | None = None
+    while monotonic() < deadline:
+        pending_batch = state.pending_repositories_after(cursor, PENDING_REPOSITORY_PAGE_SIZE)
+        if not pending_batch:
+            break
+        for pending in pending_batch:
+            if monotonic() >= deadline:
+                return inspected
+            try:
+                result, _ = source.inspect_repo(pending.repo_id, pending.revision)
+            except Exception:
+                state.record_inspection_failure(pending.repo_id)
+                continue
+            candidates = tuple(
+                file for file in result.files if is_candidate_artifact(file.path, extensions)
+            )
+            state.replace_repo(result, candidates)
+            inspected += 1
+        cursor = pending_batch[-1].repo_id
     return inspected
 
 

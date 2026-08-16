@@ -145,15 +145,26 @@ class IndexState:
 
     def pending_repositories(self, limit: int) -> tuple[PendingRepo, ...]:
         """Return a bounded deterministic batch whose indexed state is stale or absent."""
+        return self.pending_repositories_after(None, limit)
+
+    def pending_repositories_after(
+        self, repo_id: str | None, limit: int
+    ) -> tuple[PendingRepo, ...]:
+        """Return pending repositories after one cursor in deterministic order."""
         if limit <= 0:
             raise ValueError("Pending repository limit must be positive.")
-        rows = self.connection.execute(
+        query = (
             "SELECT repo_id, catalog_revision_sha, catalog_gated FROM repos "
             "WHERE eligible = 1 AND (status != 'indexed' "
-            "OR revision_sha IS NOT catalog_revision_sha OR gated != catalog_gated) "
-            "ORDER BY repo_id LIMIT ?",
-            (limit,),
-        ).fetchall()
+            "OR revision_sha IS NOT catalog_revision_sha OR gated != catalog_gated)"
+        )
+        parameters: tuple[str | int, ...]
+        if repo_id is None:
+            parameters = (limit,)
+        else:
+            query += " AND repo_id > ?"
+            parameters = (repo_id, limit)
+        rows = self.connection.execute(f"{query} ORDER BY repo_id LIMIT ?", parameters).fetchall()
         return tuple(
             PendingRepo(
                 repo_id=str(row["repo_id"]),

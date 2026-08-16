@@ -20,11 +20,13 @@ thumbnail directly from the Hub, or use the resolver URL directly.
 `facehugger crawl` advances a durable, generation-based public-model crawl. It
 persists the Hub pagination continuation and catalog observations before any
 metadata inspection, then inspects only repositories that are new, revision
-changed, or whose indexed gate state changed. Each invocation enumerates at
-most 1,000 catalog pages and inspects at most 25,000 repositories, leaving time
-to publish durable state before the workflow deadline. A complete catalog
-generation reconciles repositories no longer returned by the Hub. Each
-replacement is atomic, so interrupted runs retain the prior verified records.
+changed, or whose indexed gate state changed. Each invocation stops after its
+configured time limit; the hosted workflow uses 270 minutes, leaving one hour
+to publish durable state before its 330-minute job deadline. Cataloging and
+inspection share that deadline, so ordinary request-latency variation cannot
+turn a complete checkpoint into a job timeout. A complete catalog generation
+reconciles repositories no longer returned by the Hub. Each replacement is
+atomic, so interrupted runs retain the prior verified records.
 
 The crawler stages a new complete static index only after the catalog is fully
 enumerated and no pending inspections remain. Compilation chooses a three- or
@@ -35,7 +37,9 @@ complete staged index. Publication also refuses a staged site larger than
 900 MiB, below the GitHub Pages 1 GiB limit.
 
 After each successful incomplete checkpoint, the workflow queues the next
-bounded invocation itself. The scheduled workflow is a recovery backstop.
+time-bounded invocation itself. A GitHub Actions health monitor runs every four
+hours: it leaves active crawls alone, starts an incomplete crawl whose
+continuation was interrupted, and does nothing after complete publication.
 
 The README badges show the current crawl state plus the latest durable count of
 eligible repositories inspected and remaining. The state badge updates when a

@@ -12,15 +12,10 @@ on:
       - uv.lock
   workflow_dispatch:
     inputs:
-      inspection_limit:
-        description: Maximum changed repositories to inspect in this bounded invocation
+      time_limit_minutes:
+        description: Maximum duration for one resumable crawl invocation
         required: false
-        default: "25000"
-        type: string
-      catalog_page_limit:
-        description: Maximum model-catalog pages to enumerate in this bounded invocation
-        required: false
-        default: "1000"
+        default: "270"
         type: string
   schedule:
     - cron: "17 3 * * *"
@@ -72,7 +67,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           INDEX_VERSION: full-${{ github.run_id }}
         run: |
-          uv run facehugger crawl --root . --version "$INDEX_VERSION" --catalog-page-limit "${{ inputs.catalog_page_limit || '1000' }}" --inspection-limit "${{ inputs.inspection_limit || '25000' }}" | tee crawl-output.json
+          uv run facehugger crawl --root . --version "$INDEX_VERSION" --time-limit-minutes "${{ inputs.time_limit_minutes || '270' }}" | tee crawl-output.json
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
           echo "continue=$(jq -r '.next_invocation_ready' crawl-output.json)" >> "$GITHUB_OUTPUT"
       - name: Mark crawl as failed
@@ -105,7 +100,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run crawl.yml --ref main --field catalog_page_limit="${{ inputs.catalog_page_limit || '1000' }}" --field inspection_limit="${{ inputs.inspection_limit || '25000' }}"
+          gh workflow run crawl.yml --ref main --field time_limit_minutes="${{ inputs.time_limit_minutes || '270' }}"
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:

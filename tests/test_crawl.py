@@ -7,7 +7,13 @@ from typing import Any
 import httpx
 from pytest import MonkeyPatch
 
-from facehugger.indexer.crawl import CATALOG_URL, advance_catalog, normalize_catalog_record
+from facehugger.indexer.crawl import (
+    CATALOG_URL,
+    advance_catalog,
+    normalize_catalog_record,
+    run_full_crawl,
+)
+from facehugger.indexer.metadata_sources import InspectionMeasurement
 from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
 from facehugger.state import IndexState
 
@@ -53,7 +59,9 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
 
     monkeypatch.setattr("facehugger.indexer.crawl.normalize_catalog_record", catalog_item)
     try:
-        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, 1) == (1, False)
+        monotonic_values = iter((0.0, 1.0))
+        monkeypatch.setattr("facehugger.indexer.crawl.monotonic", lambda: next(monotonic_values))
+        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, 1.0) == (1, False)
         assert (
             state.get_metadata("catalog_next_url")
             == "https://huggingface.co/api/models?cursor=next"
@@ -61,7 +69,8 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
         assert state.catalog_generation_complete() is False
         assert state.lookup(bytes.fromhex("ab" * 32))
 
-        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, None) == (
+        monkeypatch.setattr("facehugger.indexer.crawl.monotonic", lambda: 0.0)
+        assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, float("inf")) == (
             1,
             False,
         )
@@ -114,7 +123,9 @@ def test_catalog_timeout_leaves_a_resumable_continuation(
     try:
         monkeypatch.setattr("facehugger.indexer.crawl.sleep", no_sleep)
         generation = state.start_catalog_generation()
-        assert advance_catalog(state, TimeoutCatalogClient(), (".bin",), generation, None) == (
+        assert advance_catalog(
+            state, TimeoutCatalogClient(), (".bin",), generation, float("inf")
+        ) == (
             0,
             True,
         )
@@ -122,6 +133,89 @@ def test_catalog_timeout_leaves_a_resumable_continuation(
         assert state.get_metadata("active_catalog_generation") == str(generation)
     finally:
         state.close()
+
+
+def test_full_crawl_stops_at_its_deadline_and_reports_a_continuation(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A crawl deadline leaves remaining work for a successful next invocation."""
+
+    class Clock:
+        """A deterministic monotonic clock advanced by each fake inspection."""
+
+        def __init__(self) -> None:
+            self.value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    class FakeMetadataSource:
+        """A metadata source that consumes half the invocation budget per inspection."""
+
+        def __init__(self, api: object) -> None:
+            del api
+
+        def inspect_repo(
+            self, repo_id: str, revision: str | None
+        ) -> tuple[InspectedRepo, InspectionMeasurement]:
+            clock.value += 30.0
+            return (
+                InspectedRepo(repo_id, revision or "0" * 40, ()),
+                InspectionMeasurement("test", 30.0, 0, 0, 0),
+            )
+
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "artifacts.toml").write_text("[artifacts]\nextensions = ['.bin']\n", encoding="utf-8")
+    state_directory = tmp_path / ".facehugger"
+    state_directory.mkdir()
+    state = IndexState(state_directory / "full.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        for index in range(3):
+            state.record_catalog_repo(
+                CatalogRepo(
+                    f"owner/model-{index}",
+                    str(index) * 40,
+                    None,
+                    1,
+                    False,
+                    False,
+                    ("model.bin",),
+                ),
+                eligible=True,
+                generation=generation,
+            )
+        state.finish_catalog_generation(generation)
+    finally:
+        state.close()
+
+    clock = Clock()
+
+    def skip_hub_configuration(*values: object) -> None:
+        """Avoid installing process-wide HTTP state in the deterministic test."""
+        del values
+
+    def fake_hub_api(token: str) -> object:
+        """Return an opaque API value consumed only by the fake metadata source."""
+        del token
+        return object()
+
+    monkeypatch.setattr("facehugger.indexer.crawl.monotonic", clock)
+    monkeypatch.setattr("facehugger.indexer.crawl.configure_hub_http", skip_hub_configuration)
+    monkeypatch.setattr("facehugger.indexer.crawl.create_hub_api", fake_hub_api)
+    monkeypatch.setattr("facehugger.indexer.crawl.ModelInfoMetadataSource", FakeMetadataSource)
+
+    progress = run_full_crawl(
+        root=tmp_path,
+        token="test-token",
+        version="test",
+        time_limit_minutes=1,
+    )
+
+    assert progress.inspections == 2
+    assert progress.pending_repositories == 1
+    assert progress.next_invocation_ready is True
 
 
 def test_changed_catalog_revision_is_the_only_reinspection_candidate(tmp_path: Path) -> None:
