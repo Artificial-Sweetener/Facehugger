@@ -37,9 +37,7 @@ complete staged index. Publication also refuses a staged site larger than
 900 MiB, below the GitHub Pages 1 GiB limit.
 
 After each successful incomplete checkpoint, the workflow queues the next
-time-bounded invocation itself. A GitHub Actions health monitor runs every four
-hours: it leaves active crawls alone, starts an incomplete crawl whose
-continuation was interrupted, and does nothing after complete publication.
+time-bounded invocation itself. The scheduled workflow is a recovery backstop.
 
 The README badges show the current crawl state plus the latest durable count of
 eligible repositories inspected and remaining. The state badge updates when a
