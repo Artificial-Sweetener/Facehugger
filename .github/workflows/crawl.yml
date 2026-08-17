@@ -84,12 +84,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state." || true
+          retry_github() {
+            local attempt=1
+            local maximum_attempts=5
+
+            until "$@"; do
+              if (( attempt >= maximum_attempts )); then
+                return 1
+              fi
+
+              sleep "$(( attempt * 5 ))"
+              ((attempt++))
+            done
+          }
+
+          gh release view full-crawl-state > /dev/null 2>&1 || retry_github gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state."
           assets=(.facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256)
           for report in reports/full-crawl.json reports/full-crawl-*-badge.json; do
             test ! -f "$report" || assets+=("$report")
           done
-          gh release upload full-crawl-state "${assets[@]}" --clobber
+          retry_github gh release upload full-crawl-state "${assets[@]}" --clobber
       - name: Publish completed README badge data
         if: always() && hashFiles('reports/full-crawl-*-badge.json') != ''
         uses: ./.github/actions/publish-crawl-badges
