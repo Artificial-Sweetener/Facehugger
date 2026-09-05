@@ -51,9 +51,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p .facehugger
-          gh release download full-crawl-state --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger || true
-          test ! -f .facehugger/full.sqlite.zst || (cd .facehugger && sha256sum --check full.sqlite.zst.sha256)
-          test ! -f .facehugger/full.sqlite.zst || zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
+          retry_github() {
+            local attempt=1
+            local maximum_attempts=5
+
+            until "$@"; do
+              if (( attempt >= maximum_attempts )); then
+                return 1
+              fi
+
+              sleep "$(( attempt * 5 ))"
+              ((attempt++))
+            done
+          }
+
+          restore_state() {
+            rm -f .facehugger/full.sqlite .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256
+            gh release download full-crawl-state --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger --clobber || return 1
+            (cd .facehugger && sha256sum --check full.sqlite.zst.sha256) || return 1
+            zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
+          }
+
+          if gh release view full-crawl-state > /dev/null 2>&1; then
+            retry_github restore_state
+          fi
       - name: Mark crawl as running
         run: uv run facehugger crawl-status --root . --status running
       - name: Publish README badge data
