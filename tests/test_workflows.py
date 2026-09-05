@@ -13,4 +13,6 @@ def test_full_crawl_retries_transient_release_transfer_failures() -> None:
     assert "maximum_attempts=5" in workflow
     assert "restore_state()" in workflow
     assert "retry_github restore_state" in workflow
+    assert "id: package_state" in workflow
+    assert "steps.package_state.outputs.ready == 'true'" in workflow
     assert 'retry_github gh release upload full-crawl-state "${assets[@]}" --clobber' in workflow
