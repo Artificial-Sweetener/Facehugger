@@ -31,10 +31,11 @@ atomic, so interrupted runs retain the prior verified records.
 The crawler stages a new complete static index only after the catalog is fully
 enumerated and no pending inspections remain. Compilation chooses a three- or
 four-hex-character shard prefix and refuses any shard over 128 KiB. The
-workflow preserves its compressed SQLite state in the `full-crawl-state`
-prerelease between bounded GitHub Actions invocations, then deploys only a
-complete staged index. Publication also refuses a staged site larger than
-900 MiB, below the GitHub Pages 1 GiB limit.
+workflow publishes a verified immutable SQLite checkpoint for every bounded
+invocation and retains the eight most recent checkpoints. It restores the
+newest verified checkpoint before using the `full-crawl-state` prerelease as a
+legacy fallback, then deploys only a complete staged index. Publication also
+refuses a staged site larger than 900 MiB, below the GitHub Pages 1 GiB limit.
 
 After each successful incomplete checkpoint, the workflow queues the next
 time-bounded invocation itself. The scheduled workflow is a recovery backstop.

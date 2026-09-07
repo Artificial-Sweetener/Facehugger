@@ -66,14 +66,35 @@ jobs:
           }
 
           restore_state() {
+            local release_tag="$1"
             rm -f .facehugger/full.sqlite .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256
-            gh release download full-crawl-state --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger --clobber || return 1
+            gh release download "$release_tag" --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger --clobber || return 1
             (cd .facehugger && sha256sum --check full.sqlite.zst.sha256) || return 1
             zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
+            test "$(sqlite3 .facehugger/full.sqlite 'PRAGMA integrity_check;')" = "ok"
           }
 
-          if gh release view full-crawl-state > /dev/null 2>&1; then
-            retry_github restore_state
+          checkpoint_seen=false
+          restored=false
+          while IFS= read -r checkpoint_tag; do
+            checkpoint_seen=true
+            if retry_github restore_state "$checkpoint_tag"; then
+              restored=true
+              break
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name | startswith("full-crawl-checkpoint-")) | "\(.created_at) \(.tag_name)"' \
+              | sort --reverse | cut --delimiter=' ' --fields=2-
+          )
+
+          if ! "$restored" && gh release view full-crawl-state > /dev/null 2>&1; then
+            retry_github restore_state full-crawl-state && restored=true
+          fi
+
+          if ! "$restored" && "$checkpoint_seen"; then
+            echo "No verified crawler checkpoint could be restored." >&2
+            exit 1
           fi
       - name: Mark crawl as running
         run: uv run facehugger crawl-status --root . --status running
@@ -100,10 +121,70 @@ jobs:
         run: |
           zstd --quiet --force .facehugger/full.sqlite -o .facehugger/full.sqlite.zst
           (cd .facehugger && sha256sum full.sqlite.zst > full.sqlite.zst.sha256)
+          (cd .facehugger && sha256sum --check full.sqlite.zst.sha256)
+          zstd --quiet --test .facehugger/full.sqlite.zst
+          test "$(sqlite3 .facehugger/full.sqlite 'PRAGMA integrity_check;')" = "ok"
           test "$(stat --printf='%s' .facehugger/full.sqlite.zst)" -le 1900000000
           echo "ready=true" >> "$GITHUB_OUTPUT"
-      - name: Publish durable crawler state and progress
+          echo "checkpoint_tag=full-crawl-checkpoint-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+      - id: checkpoint
+        name: Publish immutable crawler checkpoint
         if: always() && steps.package_state.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_TAG: ${{ steps.package_state.outputs.checkpoint_tag }}
+        run: |
+          retry_github() {
+            local attempt=1
+            local maximum_attempts=5
+
+            until "$@"; do
+              if (( attempt >= maximum_attempts )); then
+                return 1
+              fi
+
+              sleep "$(( attempt * 5 ))"
+              ((attempt++))
+            done
+          }
+
+          checkpoint_is_verified() {
+            local verification_directory
+            verification_directory="$(mktemp --directory)"
+            gh release download "$CHECKPOINT_TAG" --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir "$verification_directory" --clobber || return 1
+            (cd "$verification_directory" && sha256sum --check full.sqlite.zst.sha256) || return 1
+            zstd --quiet --test "$verification_directory/full.sqlite.zst"
+            zstd --quiet --decompress --force "$verification_directory/full.sqlite.zst" -o "$verification_directory/full.sqlite"
+            test "$(sqlite3 "$verification_directory/full.sqlite" 'PRAGMA integrity_check;')" = "ok"
+          }
+
+          create_checkpoint() {
+            checkpoint_is_verified && return 0
+            gh release create "$CHECKPOINT_TAG" --prerelease \
+              --title "Full crawl checkpoint $GITHUB_RUN_ID" \
+              --notes "Immutable verified crawler checkpoint." \
+              .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256
+          }
+
+          retry_github create_checkpoint
+          checkpoint_is_verified
+          echo "published=true" >> "$GITHUB_OUTPUT"
+      - name: Retain recent immutable crawler checkpoints
+        if: always() && steps.checkpoint.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          checkpoint_tags="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name | startswith("full-crawl-checkpoint-")) | "\(.created_at) \(.tag_name)"' \
+              | sort --reverse | cut --delimiter=' ' --fields=2- | tail --lines=+9
+          )"
+          while IFS= read -r checkpoint_tag; do
+            test -z "$checkpoint_tag" || gh release delete "$checkpoint_tag" --yes || \
+              echo "Unable to prune $checkpoint_tag; retaining an extra verified checkpoint."
+          done <<< "$checkpoint_tags"
+      - name: Publish durable crawler state and progress
+        if: always() && steps.checkpoint.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
