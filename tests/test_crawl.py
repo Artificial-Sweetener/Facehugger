@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any
 
 import httpx
@@ -135,10 +136,10 @@ def test_catalog_timeout_leaves_a_resumable_continuation(
         state.close()
 
 
-def test_full_crawl_stops_at_its_deadline_and_reports_a_continuation(
+def test_full_crawl_stops_scheduling_new_groups_at_its_deadline(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A crawl deadline leaves remaining work for a successful next invocation."""
+    """A crawl deadline leaves work after its bounded in-flight inspection group."""
 
     class Clock:
         """A deterministic monotonic clock advanced by each fake inspection."""
@@ -172,7 +173,7 @@ def test_full_crawl_stops_at_its_deadline_and_reports_a_continuation(
     state = IndexState(state_directory / "full.sqlite")
     try:
         generation = state.start_catalog_generation()
-        for index in range(3):
+        for index in range(16):
             state.record_catalog_repo(
                 CatalogRepo(
                     f"owner/model-{index}",
@@ -213,8 +214,8 @@ def test_full_crawl_stops_at_its_deadline_and_reports_a_continuation(
         time_limit_minutes=1,
     )
 
-    assert progress.inspections == 2
-    assert progress.pending_repositories == 1
+    assert progress.inspections == 8
+    assert progress.pending_repositories == 8
     assert progress.next_invocation_ready is True
 
 
@@ -240,3 +241,87 @@ def test_changed_catalog_revision_is_the_only_reinspection_candidate(tmp_path: P
         assert state.indexed_repository_count() == 1
     finally:
         state.close()
+
+
+def test_pending_inspections_run_concurrently_while_state_writes_remain_serial(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Multiple outbound inspections can start before the crawler persists their results."""
+    active = 0
+    maximum_active = 0
+    active_lock = Lock()
+    concurrent_start = Event()
+
+    class ConcurrentMetadataSource:
+        """Metadata source that records whether the crawler issues concurrent reads."""
+
+        def __init__(self, api: object) -> None:
+            del api
+
+        def inspect_repo(
+            self, repo_id: str, revision: str | None
+        ) -> tuple[InspectedRepo, InspectionMeasurement]:
+            nonlocal active, maximum_active
+            with active_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+                if active >= 2:
+                    concurrent_start.set()
+            concurrent_start.wait(timeout=2)
+            with active_lock:
+                active -= 1
+            return (
+                InspectedRepo(repo_id, revision or "0" * 40, ()),
+                InspectionMeasurement("test", 0.0, 0, 0, 0),
+            )
+
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "artifacts.toml").write_text("[artifacts]\nextensions = ['.bin']\n", encoding="utf-8")
+    state_directory = tmp_path / ".facehugger"
+    state_directory.mkdir()
+    state = IndexState(state_directory / "full.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        for index in range(2):
+            state.record_catalog_repo(
+                CatalogRepo(
+                    f"owner/model-{index}",
+                    str(index) * 40,
+                    None,
+                    1,
+                    False,
+                    False,
+                    ("model.bin",),
+                ),
+                eligible=True,
+                generation=generation,
+            )
+        state.finish_catalog_generation(generation)
+    finally:
+        state.close()
+
+    def skip_hub_configuration(*values: object) -> None:
+        """Avoid installing process-wide HTTP state in the deterministic test."""
+        del values
+
+    def fake_hub_api(token: str) -> object:
+        """Return an opaque API value consumed only by the fake metadata source."""
+        del token
+        return object()
+
+    monkeypatch.setattr(
+        "facehugger.indexer.crawl.ModelInfoMetadataSource", ConcurrentMetadataSource
+    )
+    monkeypatch.setattr("facehugger.indexer.crawl.configure_hub_http", skip_hub_configuration)
+    monkeypatch.setattr("facehugger.indexer.crawl.create_hub_api", fake_hub_api)
+
+    progress = run_full_crawl(
+        root=tmp_path,
+        token="test-token",
+        version="test",
+        time_limit_minutes=1,
+    )
+
+    assert progress.inspections == 2
+    assert maximum_active >= 2

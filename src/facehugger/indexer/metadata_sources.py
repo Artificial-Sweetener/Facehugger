@@ -5,9 +5,10 @@ from time import perf_counter
 from typing import Literal, Protocol
 
 from huggingface_hub import HfApi
+from huggingface_hub.errors import RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import RepoFile
 
-from facehugger.errors import MetadataError
+from facehugger.errors import MetadataError, RepositoryUnavailableError
 from facehugger.hashes import sha256_bytes
 from facehugger.models import InspectedFile, InspectedRepo
 
@@ -58,6 +59,10 @@ class ModelInfoMetadataSource:
                 timeout=self.timeout_seconds,
                 token=None,
             )
+        except (RepositoryNotFoundError, RevisionNotFoundError) as error:
+            raise RepositoryUnavailableError(
+                f"Model repository or revision is unavailable for {repo_id}."
+            ) from error
         except Exception as error:
             raise MetadataError(f"Model metadata inspection failed for {repo_id}.") from error
         resolved_revision = info.sha or revision

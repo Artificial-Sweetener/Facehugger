@@ -3,10 +3,12 @@
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from huggingface_hub import HfApi
+from huggingface_hub.errors import RepositoryNotFoundError
 
-from facehugger.errors import MetadataError
+from facehugger.errors import MetadataError, RepositoryUnavailableError
 from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 
 
@@ -56,4 +58,22 @@ def test_model_info_rejects_invalid_lfs_sha256() -> None:
     )
     source = ModelInfoMetadataSource(cast(HfApi, FakeApi(sibling)))
     with pytest.raises(MetadataError):
+        source.inspect_repo("owner/model", None)
+
+
+def test_model_info_marks_a_confirmed_missing_repository_as_unavailable() -> None:
+    """A Hub repository 404 is distinct from a transient metadata failure."""
+
+    class MissingRepositoryApi:
+        """Model-info transport that reports one confirmed missing repository."""
+
+        def model_info(self, *_: object, **__: object) -> object:
+            response = httpx.Response(
+                404,
+                request=httpx.Request("GET", "https://huggingface.co/api/models/x"),
+            )
+            raise RepositoryNotFoundError("missing", response=response)
+
+    source = ModelInfoMetadataSource(cast(HfApi, MissingRepositoryApi()))
+    with pytest.raises(RepositoryUnavailableError):
         source.inspect_repo("owner/model", None)

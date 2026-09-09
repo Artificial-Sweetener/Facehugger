@@ -28,6 +28,11 @@ turn a complete checkpoint into a job timeout. A complete catalog generation
 reconciles repositories no longer returned by the Hub. Each replacement is
 atomic, so interrupted runs retain the prior verified records.
 
+Metadata reads use bounded concurrency behind one shared Hub request limiter.
+When the Hub confirms that a cataloged repository or revision is no longer
+available, Facehugger removes it from the active generation; a later catalog
+can reintroduce it if it returns.
+
 The crawler stages a new complete static index only after the catalog is fully
 enumerated and no pending inspections remain. Compilation chooses a three- or
 four-hex-character shard prefix and refuses any shard over 128 KiB. The

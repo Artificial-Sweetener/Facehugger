@@ -1,5 +1,6 @@
 """Resumable full-catalog crawling and staged static-index compilation."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any, Protocol, cast
 import httpx
 from huggingface_hub import HfApi
 
+from facehugger.errors import RepositoryUnavailableError
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
 from facehugger.indexer.crawl_reports import (
     write_full_crawl_report,
@@ -17,15 +19,16 @@ from facehugger.indexer.crawl_reports import (
 from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 from facehugger.indexer.rate_limit import RateController, RequestMetrics
-from facehugger.models import CatalogRepo
+from facehugger.models import CatalogRepo, PendingRepo
 from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
 CATALOG_URL = "https://huggingface.co/api/models"
 CATALOG_PAGE_SIZE = 100
-CRAWL_REQUESTS_PER_MINUTE = 100
+CRAWL_REQUESTS_PER_MINUTE = 180
 DEFAULT_CRAWL_TIME_LIMIT_MINUTES = 270
 PENDING_REPOSITORY_PAGE_SIZE = 1_000
+INSPECTION_WORKERS = 8
 MAX_PUBLISHED_SITE_BYTES = 900 * 1024 * 1024
 CATALOG_RETRY_ATTEMPTS = 3
 
@@ -300,28 +303,54 @@ def _inspect_pending(
     state: IndexState, api: HfApi, extensions: tuple[str, ...], deadline: float
 ) -> int:
     """Inspect and atomically replace pending repositories until the invocation deadline."""
-    source = ModelInfoMetadataSource(api)
     inspected = 0
     cursor: str | None = None
-    while monotonic() < deadline:
-        pending_batch = state.pending_repositories_after(cursor, PENDING_REPOSITORY_PAGE_SIZE)
-        if not pending_batch:
-            break
-        for pending in pending_batch:
-            if monotonic() >= deadline:
-                return inspected
-            try:
-                result, _ = source.inspect_repo(pending.repo_id, pending.revision)
-            except Exception:
-                state.record_inspection_failure(pending.repo_id)
-                continue
-            candidates = tuple(
-                file for file in result.files if is_candidate_artifact(file.path, extensions)
-            )
-            state.replace_repo(result, candidates)
-            inspected += 1
-        cursor = pending_batch[-1].repo_id
+    with ThreadPoolExecutor(max_workers=INSPECTION_WORKERS) as executor:
+        source = ModelInfoMetadataSource(api)
+        while monotonic() < deadline:
+            pending_batch = state.pending_repositories_after(cursor, PENDING_REPOSITORY_PAGE_SIZE)
+            if not pending_batch:
+                break
+            for pending_group in _inspection_groups(pending_batch):
+                if monotonic() >= deadline:
+                    return inspected
+                futures = tuple(
+                    (
+                        pending,
+                        executor.submit(source.inspect_repo, pending.repo_id, pending.revision),
+                    )
+                    for pending in pending_group
+                )
+                for pending, future in futures:
+                    try:
+                        result, _ = future.result()
+                    except RepositoryUnavailableError:
+                        state.record_repository_unavailable(
+                            pending.repo_id, pending.revision, pending.gated
+                        )
+                        continue
+                    except Exception:
+                        state.record_inspection_failure(pending.repo_id)
+                        continue
+                    candidates = tuple(
+                        file
+                        for file in result.files
+                        if is_candidate_artifact(file.path, extensions)
+                    )
+                    state.replace_repo(result, candidates)
+                    inspected += 1
+            cursor = pending_batch[-1].repo_id
     return inspected
+
+
+def _inspection_groups(
+    pending_repositories: tuple[PendingRepo, ...],
+) -> tuple[tuple[PendingRepo, ...], ...]:
+    """Partition pending repository work into bounded concurrent inspection groups."""
+    return tuple(
+        pending_repositories[index : index + INSPECTION_WORKERS]
+        for index in range(0, len(pending_repositories), INSPECTION_WORKERS)
+    )
 
 
 def _compile_staged_site(state: IndexState, root: Path, version: str) -> None:

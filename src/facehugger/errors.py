@@ -21,5 +21,9 @@ class MetadataError(FacehuggerError):
     """Raised when Hub metadata cannot be inspected safely."""
 
 
+class RepositoryUnavailableError(MetadataError):
+    """Raised when a cataloged repository revision no longer exists on the Hub."""
+
+
 class ProofStopError(FacehuggerError):
     """Raised when proof evidence reaches a mandatory stop condition."""

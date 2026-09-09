@@ -6,7 +6,7 @@ from typing import Literal, cast
 
 import pytest
 
-from facehugger.models import InspectedFile, InspectedRepo
+from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
 from facehugger.state import IndexState
 
 _DIGEST = bytes.fromhex("ab" * 32)
@@ -92,5 +92,33 @@ def test_inspection_failure_preserves_verified_occurrences_for_later_retry(tmp_p
         state.record_inspection_failure(repo.repo_id)
         assert state.lookup(_DIGEST)[0].repo_id == repo.repo_id
         assert state.counts()["inspection_errors"] == 1
+    finally:
+        state.close()
+
+
+def test_unavailable_repository_is_excluded_until_a_catalog_reintroduces_it(tmp_path: Path) -> None:
+    """A confirmed Hub 404 stops repeated work without preserving stale lookup results."""
+    state = IndexState(tmp_path / "state.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        cataloged = CatalogRepo(
+            "example/model", "1" * 40, None, 1, False, False, ("model.safetensors",)
+        )
+        state.record_catalog_repo(cataloged, eligible=True, generation=generation)
+        inspected = InspectedRepo(
+            cataloged.repo_id,
+            cataloged.revision or "",
+            (InspectedFile("model.safetensors", 10, None, _DIGEST, None, "lfs"),),
+        )
+        state.replace_repo(inspected, inspected.files)
+
+        state.record_repository_unavailable(cataloged.repo_id, cataloged.revision, cataloged.gated)
+
+        assert state.lookup(_DIGEST) == ()
+        assert state.eligible_repository_count() == 0
+        assert state.pending_repository_count() == 0
+
+        state.record_catalog_repo(cataloged, eligible=True, generation=generation)
+        assert state.pending_repositories(1)[0].repo_id == cataloged.repo_id
     finally:
         state.close()

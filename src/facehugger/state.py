@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS candidate_files_without_sha256 (
 );
 """
 
+_PENDING_REPOSITORY_CONDITION = """
+eligible = 1 AND (
+    status NOT IN ('indexed', 'unavailable')
+    OR revision_sha IS NOT catalog_revision_sha
+    OR gated != catalog_gated
+)
+"""
+
 
 class IndexState:
     """Persistent reverse index with replacement semantics per repository."""
@@ -155,8 +163,7 @@ class IndexState:
             raise ValueError("Pending repository limit must be positive.")
         query = (
             "SELECT repo_id, catalog_revision_sha, catalog_gated FROM repos "
-            "WHERE eligible = 1 AND (status != 'indexed' "
-            "OR revision_sha IS NOT catalog_revision_sha OR gated != catalog_gated)"
+            f"WHERE {_PENDING_REPOSITORY_CONDITION}"
         )
         parameters: tuple[str | int, ...]
         if repo_id is None:
@@ -180,8 +187,7 @@ class IndexState:
         """Return the number of cataloged repositories awaiting inspection."""
         return int(
             self.connection.execute(
-                "SELECT COUNT(*) FROM repos WHERE eligible = 1 AND (status != 'indexed' "
-                "OR revision_sha IS NOT catalog_revision_sha OR gated != catalog_gated)"
+                f"SELECT COUNT(*) FROM repos WHERE {_PENDING_REPOSITORY_CONDITION}"
             ).fetchone()[0]
         )
 
@@ -207,6 +213,20 @@ class IndexState:
             (now, repo_id),
         )
         self.connection.commit()
+
+    def record_repository_unavailable(
+        self, repo_id: str, revision: str | None, gated: bool
+    ) -> None:
+        """Exclude a confirmed-missing repository until a later catalog reintroduces it."""
+        now = datetime.now(UTC).isoformat()
+        with self.transaction():
+            self.connection.execute(
+                "UPDATE repos SET revision_sha = ?, gated = ?, eligible = 0, "
+                "status = 'unavailable', last_scanned_at = ? WHERE repo_id = ?",
+                (revision, int(gated), now, repo_id),
+            )
+            self._remove_repo_records(repo_id)
+            self._remove_orphan_artifacts()
 
     def complete_catalog_generation(self) -> None:
         """Mark a fully inspected active generation as the current catalog snapshot."""
@@ -398,7 +418,10 @@ class IndexState:
             "catalog_revision_sha = excluded.catalog_revision_sha, "
             "catalog_gated = excluded.catalog_gated, eligible = excluded.eligible, "
             "catalog_generation = excluded.catalog_generation, "
-            "status = CASE WHEN excluded.eligible = 0 THEN 'excluded' ELSE repos.status END",
+            "status = CASE "
+            "WHEN excluded.eligible = 0 THEN 'excluded' "
+            "WHEN repos.status IN ('excluded', 'unavailable') THEN 'pending' "
+            "ELSE repos.status END",
             (
                 repo.repo_id,
                 int(repo.private),
