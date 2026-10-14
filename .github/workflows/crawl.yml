@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       time_limit_minutes:
-        description: Maximum duration for one resumable crawl invocation
+        description: Requested duration for one resumable crawl invocation (capped at 240 minutes)
         required: false
-        default: "270"
+        default: "240"
         type: string
   schedule:
     - cron: "17 3 * * *"
@@ -67,9 +67,30 @@ jobs:
 
           restore_state() {
             local release_tag="$1"
-            rm -f .facehugger/full.sqlite .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256
-            gh release download "$release_tag" --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger --clobber || return 1
-            (cd .facehugger && sha256sum --check full.sqlite.zst.sha256) || return 1
+            rm -f .facehugger/full.sqlite .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256 .facehugger/full.sqlite.zst.parts.json .facehugger/full.sqlite.zst.part-*
+            if gh release view "$release_tag" --json assets --jq '.assets | any(.name == "full.sqlite.zst.parts.json")' | grep --quiet '^true$'; then
+              gh release download "$release_tag" --pattern full.sqlite.zst.parts.json --dir .facehugger --clobber || return 1
+              jq --exit-status '
+                .schema == 1 and .archive == "full.sqlite.zst" and
+                (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0) and
+                (.parts | length > 0) and
+                all(.parts[]; (.name | test("^full\\.sqlite\\.zst\\.part-[0-9]{5}$")) and
+                  (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0))
+              ' .facehugger/full.sqlite.zst.parts.json || return 1
+              while IFS=$'\t' read -r part sha256; do
+                gh release download "$release_tag" --pattern "$part" --dir .facehugger --clobber || return 1
+                printf '%s  %s\n' "$sha256" "$part" | (cd .facehugger && sha256sum --check --status -) || return 1
+              done < <(jq --raw-output '.parts[] | [.name, .sha256] | @tsv' .facehugger/full.sqlite.zst.parts.json)
+              jq --raw-output '.parts[].name' .facehugger/full.sqlite.zst.parts.json \
+                | while IFS= read -r part; do cat ".facehugger/$part"; done \
+                > .facehugger/full.sqlite.zst
+              printf '%s  %s\n' \
+                "$(jq --raw-output '.sha256' .facehugger/full.sqlite.zst.parts.json)" \
+                full.sqlite.zst | (cd .facehugger && sha256sum --check --status -) || return 1
+            else
+              gh release download "$release_tag" --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir .facehugger --clobber || return 1
+              (cd .facehugger && sha256sum --check full.sqlite.zst.sha256) || return 1
+            fi
             zstd --quiet --decompress --force .facehugger/full.sqlite.zst -o .facehugger/full.sqlite
             test "$(sqlite3 .facehugger/full.sqlite 'PRAGMA integrity_check;')" = "ok"
           }
@@ -103,13 +124,30 @@ jobs:
         uses: ./.github/actions/publish-crawl-badges
         with:
           github-token: ${{ github.token }}
+      - id: crawl_budget
+        name: Bound crawl time budget
+        env:
+          REQUESTED_MINUTES: ${{ inputs.time_limit_minutes || '240' }}
+        run: |
+          if ! [[ "$REQUESTED_MINUTES" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The crawl time limit must be a positive whole number." >&2
+            exit 1
+          fi
+
+          maximum_minutes=240
+          effective_minutes=$REQUESTED_MINUTES
+          if (( effective_minutes > maximum_minutes )); then
+            echo "Capping the requested $effective_minutes minute crawl at $maximum_minutes minutes."
+            effective_minutes=$maximum_minutes
+          fi
+          echo "minutes=$effective_minutes" >> "$GITHUB_OUTPUT"
       - id: crawl
         name: Advance resumable full crawl
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           INDEX_VERSION: full-${{ github.run_id }}
         run: |
-          uv run facehugger crawl --root . --version "$INDEX_VERSION" --time-limit-minutes "${{ inputs.time_limit_minutes || '270' }}" | tee crawl-output.json
+          uv run facehugger crawl --root . --version "$INDEX_VERSION" --time-limit-minutes "${{ steps.crawl_budget.outputs.minutes }}" | tee crawl-output.json
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
           echo "continue=$(jq -r '.next_invocation_ready' crawl-output.json)" >> "$GITHUB_OUTPUT"
       - name: Mark crawl as failed
@@ -124,7 +162,31 @@ jobs:
           (cd .facehugger && sha256sum --check full.sqlite.zst.sha256)
           zstd --quiet --test .facehugger/full.sqlite.zst
           test "$(sqlite3 .facehugger/full.sqlite 'PRAGMA integrity_check;')" = "ok"
-          test "$(stat --printf='%s' .facehugger/full.sqlite.zst)" -le 1900000000
+          split --bytes=1600000000 --numeric-suffixes=0 --suffix-length=5 \
+            .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.part-
+          parts="$(
+            for part in .facehugger/full.sqlite.zst.part-*; do
+              jq --null-input \
+                --arg name "$(basename "$part")" \
+                --arg sha256 "$(sha256sum "$part" | cut --delimiter=' ' --fields=1)" \
+                --argjson size "$(stat --printf='%s' "$part")" \
+                '{name: $name, sha256: $sha256, size: $size}'
+            done | jq --slurp .
+          )"
+          jq --null-input \
+            --arg archive "full.sqlite.zst" \
+            --arg sha256 "$(sha256sum .facehugger/full.sqlite.zst | cut --delimiter=' ' --fields=1)" \
+            --argjson size "$(stat --printf='%s' .facehugger/full.sqlite.zst)" \
+            --argjson parts "$parts" \
+            '{schema: 1, archive: $archive, sha256: $sha256, size: $size, parts: $parts}' \
+            > .facehugger/full.sqlite.zst.parts.json
+          jq --exit-status '
+            .schema == 1 and .archive == "full.sqlite.zst" and
+            (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0) and
+            (.parts | length > 0) and
+            all(.parts[]; (.name | test("^full\\.sqlite\\.zst\\.part-[0-9]{5}$")) and
+              (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0))
+          ' .facehugger/full.sqlite.zst.parts.json
           echo "ready=true" >> "$GITHUB_OUTPUT"
           echo "checkpoint_tag=full-crawl-checkpoint-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
       - id: checkpoint
@@ -151,8 +213,25 @@ jobs:
           checkpoint_is_verified() {
             local verification_directory
             verification_directory="$(mktemp --directory)"
-            gh release download "$CHECKPOINT_TAG" --pattern full.sqlite.zst --pattern full.sqlite.zst.sha256 --dir "$verification_directory" --clobber || return 1
-            (cd "$verification_directory" && sha256sum --check full.sqlite.zst.sha256) || return 1
+            trap 'rm --recursive --force "$verification_directory"' RETURN
+            gh release download "$CHECKPOINT_TAG" --pattern full.sqlite.zst.parts.json --dir "$verification_directory" --clobber || return 1
+            jq --exit-status '
+              .schema == 1 and .archive == "full.sqlite.zst" and
+              (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0) and
+              (.parts | length > 0) and
+              all(.parts[]; (.name | test("^full\\.sqlite\\.zst\\.part-[0-9]{5}$")) and
+                (.sha256 | test("^[0-9a-f]{64}$")) and (.size > 0))
+            ' "$verification_directory/full.sqlite.zst.parts.json" || return 1
+            while IFS=$'\t' read -r part sha256; do
+              gh release download "$CHECKPOINT_TAG" --pattern "$part" --dir "$verification_directory" --clobber || return 1
+              printf '%s  %s\n' "$sha256" "$part" | (cd "$verification_directory" && sha256sum --check --status -) || return 1
+            done < <(jq --raw-output '.parts[] | [.name, .sha256] | @tsv' "$verification_directory/full.sqlite.zst.parts.json")
+            jq --raw-output '.parts[].name' "$verification_directory/full.sqlite.zst.parts.json" \
+              | while IFS= read -r part; do cat "$verification_directory/$part"; done \
+              > "$verification_directory/full.sqlite.zst"
+            printf '%s  %s\n' \
+              "$(jq --raw-output '.sha256' "$verification_directory/full.sqlite.zst.parts.json")" \
+              full.sqlite.zst | (cd "$verification_directory" && sha256sum --check --status -) || return 1
             zstd --quiet --test "$verification_directory/full.sqlite.zst"
             zstd --quiet --decompress --force "$verification_directory/full.sqlite.zst" -o "$verification_directory/full.sqlite"
             test "$(sqlite3 "$verification_directory/full.sqlite" 'PRAGMA integrity_check;')" = "ok"
@@ -160,10 +239,15 @@ jobs:
 
           create_checkpoint() {
             checkpoint_is_verified && return 0
-            gh release create "$CHECKPOINT_TAG" --prerelease \
-              --title "Full crawl checkpoint $GITHUB_RUN_ID" \
-              --notes "Immutable verified crawler checkpoint." \
-              .facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256
+            assets=(.facehugger/full.sqlite.zst.parts.json .facehugger/full.sqlite.zst.part-*)
+            if gh release view "$CHECKPOINT_TAG" > /dev/null 2>&1; then
+              gh release upload "$CHECKPOINT_TAG" "${assets[@]}" --clobber
+            else
+              gh release create "$CHECKPOINT_TAG" --prerelease \
+                --title "Full crawl checkpoint $GITHUB_RUN_ID" \
+                --notes "Immutable verified crawler checkpoint." \
+                "${assets[@]}"
+            fi
           }
 
           retry_github create_checkpoint
@@ -203,7 +287,7 @@ jobs:
           }
 
           gh release view full-crawl-state > /dev/null 2>&1 || retry_github gh release create full-crawl-state --prerelease --title "Full crawl state" --notes "Durable resumable crawler state."
-          assets=(.facehugger/full.sqlite.zst .facehugger/full.sqlite.zst.sha256)
+          assets=(.facehugger/full.sqlite.zst.parts.json .facehugger/full.sqlite.zst.part-*)
           for report in reports/full-crawl.json reports/full-crawl-*-badge.json; do
             test ! -f "$report" || assets+=("$report")
           done
@@ -218,7 +302,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run crawl.yml --ref main --field time_limit_minutes="${{ inputs.time_limit_minutes || '270' }}"
+          gh workflow run crawl.yml --ref main --field time_limit_minutes="${{ steps.crawl_budget.outputs.minutes }}"
       - uses: actions/upload-pages-artifact@v3
         if: steps.crawl.outputs.published == 'true'
         with:

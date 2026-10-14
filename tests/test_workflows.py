@@ -23,3 +23,17 @@ def test_full_crawl_restores_verified_immutable_checkpoints() -> None:
     assert "zstd --quiet --test .facehugger/full.sqlite.zst" in workflow
     assert "steps.checkpoint.outputs.published == 'true'" in workflow
     assert 'retry_github gh release upload full-crawl-state "${assets[@]}" --clobber' in workflow
+
+
+def test_full_crawl_chunks_state_and_reserves_publication_time() -> None:
+    """The workflow keeps state recoverable within runner and release asset limits."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "crawl.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "maximum_minutes=240" in workflow
+    assert "split --bytes=1600000000" in workflow
+    assert "full.sqlite.zst.parts.json" in workflow
+    assert '"${assets[@]}"' in workflow
+    assert "full.sqlite.zst.part-*" in workflow
+    assert "steps.crawl_budget.outputs.minutes" in workflow

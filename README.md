@@ -21,10 +21,10 @@ thumbnail directly from the Hub, or use the resolver URL directly.
 persists the Hub pagination continuation and catalog observations before any
 metadata inspection, then inspects only repositories that are new, revision
 changed, or whose indexed gate state changed. Each invocation stops after its
-configured time limit; the hosted workflow uses 270 minutes, leaving one hour
-to publish durable state before its 330-minute job deadline. Cataloging and
-inspection share that deadline, so ordinary request-latency variation cannot
-turn a complete checkpoint into a job timeout. A complete catalog generation
+configured time limit; the hosted workflow caps batches at 240 minutes, leaving
+90 minutes to publish durable state before its 330-minute job deadline.
+Cataloging and inspection share that deadline, so ordinary request-latency
+variation cannot turn a complete checkpoint into a job timeout. A complete catalog generation
 reconciles repositories no longer returned by the Hub. Each replacement is
 atomic, so interrupted runs retain the prior verified records.
 
@@ -37,7 +37,9 @@ The crawler stages a new complete static index only after the catalog is fully
 enumerated and no pending inspections remain. Compilation chooses a three- or
 four-hex-character shard prefix and refuses any shard over 128 KiB. The
 workflow publishes a verified immutable SQLite checkpoint for every bounded
-invocation and retains the eight most recent checkpoints. It restores the
+invocation and retains the eight most recent checkpoints. Checkpoint archives
+are split into verified release assets before they approach GitHub's per-asset
+limit. It restores the
 newest verified checkpoint before using the `full-crawl-state` prerelease as a
 legacy fallback, then deploys only a complete staged index. Publication also
 refuses a staged site larger than 900 MiB, below the GitHub Pages 1 GiB limit.
