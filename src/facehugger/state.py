@@ -243,14 +243,14 @@ class IndexState:
     def replace_repo(
         self, inspected: InspectedRepo, candidate_files: tuple[InspectedFile, ...]
     ) -> None:
-        """Atomically replace all indexed occurrences for one repository revision."""
+        """Atomically replace occurrences and reconcile the latest observed gate state."""
         now = datetime.now(UTC).isoformat()
         with self.transaction():
             self.connection.execute(
                 "INSERT INTO repos(repo_id, revision_sha, gated, status, last_scanned_at) "
                 "VALUES (?, ?, ?, 'indexed', ?) "
                 "ON CONFLICT(repo_id) DO UPDATE SET revision_sha = excluded.revision_sha, "
-                "gated = excluded.gated, "
+                "gated = excluded.gated, catalog_gated = excluded.gated, "
                 "status = excluded.status, last_scanned_at = excluded.last_scanned_at",
                 (inspected.repo_id, inspected.revision, int(inspected.gated), now),
             )

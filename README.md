@@ -20,8 +20,10 @@ thumbnail directly from the Hub, or use the resolver URL directly.
 `facehugger crawl` advances a durable, generation-based public-model crawl. It
 persists the Hub pagination continuation and catalog observations before any
 metadata inspection, then inspects only repositories that are new, revision
-changed, or whose indexed gate state changed. Each invocation stops after its
-configured time limit; the hosted workflow caps batches at 240 minutes, leaving
+changed, or whose indexed gate state changed. Successful inspection reconciles
+the gate state with the latest Hub metadata, including changes made since
+cataloging. Each invocation stops after its configured time limit; the hosted
+workflow caps batches at 240 minutes, leaving
 90 minutes to publish durable state before its 330-minute job deadline.
 Cataloging and inspection share that deadline, so ordinary request-latency
 variation cannot turn a complete checkpoint into a job timeout. A complete catalog generation

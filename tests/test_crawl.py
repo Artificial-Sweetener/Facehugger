@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Lock
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -17,6 +18,50 @@ from facehugger.indexer.crawl import (
 from facehugger.indexer.metadata_sources import InspectionMeasurement
 from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
 from facehugger.state import IndexState
+
+
+def test_full_crawl_publishes_after_a_gate_change_since_cataloging(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A successful inspection with newer gate metadata can complete publication."""
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "artifacts.toml").write_text("[artifacts]\nextensions = ['.bin']\n")
+    (tmp_path / ".facehugger").mkdir()
+    state = IndexState(tmp_path / ".facehugger" / "full.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        state.record_catalog_repo(
+            CatalogRepo("owner/model", "1" * 40, None, 1, False, False, ("model.bin",)),
+            eligible=True,
+            generation=generation,
+        )
+        state.finish_catalog_generation(generation)
+    finally:
+        state.close()
+
+    class HubApi:
+        """Return a gated revision whose catalog observation was ungated."""
+
+        def model_info(self, *args: object, **kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(sha="1" * 40, siblings=[], gated="auto")
+
+    def skip_hub_configuration(*args: object) -> None:
+        """Keep the controlled test independent of process-wide HTTP configuration."""
+
+    def create_test_api(token: str) -> HubApi:
+        """Return the metadata-only test transport."""
+        return HubApi()
+
+    monkeypatch.setattr("facehugger.indexer.crawl.configure_hub_http", skip_hub_configuration)
+    monkeypatch.setattr("facehugger.indexer.crawl.create_hub_api", create_test_api)
+    progress = run_full_crawl(root=tmp_path, token="test", version="gate-change")
+
+    assert progress.inspections == 1
+    assert progress.pending_repositories == 0
+    assert progress.published is True
+    assert progress.next_invocation_ready is False
+    assert (tmp_path / "site-staging" / "api" / "v1" / "manifest.json").is_file()
 
 
 def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(

@@ -12,6 +12,40 @@ from facehugger.state import IndexState
 _DIGEST = bytes.fromhex("ab" * 32)
 
 
+@pytest.mark.parametrize("catalog_gated", [False, True])
+def test_successful_inspection_reconciles_gate_changes_since_cataloging(
+    tmp_path: Path, catalog_gated: bool
+) -> None:
+    """A verified gate change finishes work and later catalog changes still queue it."""
+    state = IndexState(tmp_path / "state.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        cataloged = CatalogRepo(
+            "example/model", "1" * 40, None, 1, False, catalog_gated, ("model.bin",)
+        )
+        state.record_catalog_repo(cataloged, eligible=True, generation=generation)
+        state.finish_catalog_generation(generation)
+        inspected = InspectedRepo(
+            cataloged.repo_id,
+            "1" * 40,
+            (InspectedFile("model.bin", 10, None, _DIGEST, None, "lfs"),),
+            gated=not catalog_gated,
+        )
+        state.replace_repo(inspected, inspected.files)
+
+        assert state.pending_repository_count() == 0
+        assert state.pending_repositories(1) == ()
+        assert state.lookup(_DIGEST)[0].gated is not catalog_gated
+        state.complete_catalog_generation()
+
+        next_generation = state.start_catalog_generation()
+        state.record_catalog_repo(cataloged, eligible=True, generation=next_generation)
+        assert state.pending_repository_count() == 1
+        assert state.pending_repositories(1)[0].gated is catalog_gated
+    finally:
+        state.close()
+
+
 def test_state_returns_duplicate_occurrences_and_replaces_a_repo(tmp_path: Path) -> None:
     """A changed repository replaces only its own current occurrences."""
     state = IndexState(tmp_path / "state.sqlite")
