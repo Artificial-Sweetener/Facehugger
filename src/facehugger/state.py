@@ -339,7 +339,7 @@ class IndexState:
 
     def iter_artifacts(self) -> Iterator[tuple[bytes, tuple[Occurrence, ...]]]:
         """Yield every artifact digest and its sorted occurrences."""
-        rows = self.connection.execute("SELECT sha256 FROM artifacts ORDER BY sha256").fetchall()
+        rows = self.connection.execute("SELECT sha256 FROM artifacts ORDER BY sha256")
         for row in rows:
             digest = bytes(row["sha256"])
             yield digest, self.lookup(digest)

@@ -36,7 +36,8 @@ available, Facehugger removes it from the active generation; a later catalog
 can reintroduce it if it returns.
 
 The crawler stages a new complete static index only after the catalog is fully
-enumerated and no pending inspections remain. Compilation chooses a three- or
+enumerated and no pending inspections remain. Compilation streams database
+records and holds one bounded shard in memory at a time. It chooses a three- or
 four-hex-character shard prefix and refuses any shard over 128 KiB. The
 workflow publishes a verified immutable SQLite checkpoint for every bounded
 invocation and retains the eight most recent checkpoints. Checkpoint archives

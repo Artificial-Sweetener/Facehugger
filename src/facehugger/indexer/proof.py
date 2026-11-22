@@ -17,6 +17,7 @@ from facehugger.errors import ProofStopError
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
 from facehugger.indexer.benchmarks import measure_local_lookup
 from facehugger.indexer.catalog import ProofCorpus, select_proof_corpus
+from facehugger.indexer.compiler import compile_site
 from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import (
     InspectionMeasurement,
@@ -30,7 +31,6 @@ from facehugger.indexer.reports import (
     write_proof_reports,
 )
 from facehugger.models import CatalogRepo, InspectedFile
-from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
 PROOF_REPO_CAP = 5000

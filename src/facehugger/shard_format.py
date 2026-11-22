@@ -1,14 +1,10 @@
-"""Static JSON shard compilation and protocol validation."""
+"""Static lookup protocol schemas and validation."""
 
-import hashlib
-import json
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, cast
+from datetime import datetime
+from typing import cast
 
 from facehugger.errors import IndexIntegrityError
 from facehugger.models import IndexInfo, Occurrence
-from facehugger.state import IndexState
 
 SCHEMA_VERSION = 3
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, SCHEMA_VERSION})
@@ -16,62 +12,6 @@ MIN_PREFIX_HEX_CHARS = 3
 MAX_PREFIX_HEX_CHARS = 4
 MAX_SHARD_BYTES = 128 * 1024
 RECORD_FORMAT = "facehugger-json-shard-v3"
-
-
-def compile_site(
-    state: IndexState,
-    destination: Path,
-    *,
-    version: str,
-    generated_at: datetime,
-    catalog_cutoff: datetime | None,
-    complete: bool,
-) -> dict[str, Any]:
-    """Compile one deterministic versioned site from a verified SQLite state."""
-    state.validate()
-    destination.mkdir(parents=True, exist_ok=True)
-    root = destination / "api" / "v1"
-    index_root = root / "index" / version / "sha256"
-    records, prefix_length = _records_for_size(state)
-    shard_sizes: list[int] = []
-    empty_shards = 0
-    for prefix, values in records.items():
-        values.sort(key=lambda item: str(item[0]))
-        shard = {"v": SCHEMA_VERSION, "p": prefix, "r": values}
-        encoded = _canonical_json(shard)
-        shard_path = index_root / prefix[:2] / f"{prefix[2:]}.json"
-        shard_path.parent.mkdir(parents=True, exist_ok=True)
-        shard_path.write_bytes(encoded)
-        shard_sizes.append(len(encoded))
-        empty_shards += int(not values)
-    counts = state.counts()
-    manifest: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "algorithm": "sha256",
-        "index_version": version,
-        "generated_at": generated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "catalog_cutoff": None
-        if catalog_cutoff is None
-        else catalog_cutoff.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "complete": complete,
-        "prefix_hex_chars": prefix_length,
-        "record_format": RECORD_FORMAT,
-        "base_path": f"api/v1/index/{version}/sha256",
-        "counts": counts,
-        "coverage": _coverage(state),
-        "manifest_sha256": "",
-    }
-    manifest["manifest_sha256"] = hashlib.sha256(_canonical_json(manifest)).hexdigest()
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "manifest.json").write_bytes(_canonical_json(manifest))
-    (destination / "index.html").write_text(_index_html(), encoding="utf-8")
-    return {
-        "manifest": manifest,
-        "shard_count": len(shard_sizes),
-        "empty_shard_count": empty_shards,
-        "shard_sizes": shard_sizes,
-        "prefix_hex_chars": prefix_length,
-    }
 
 
 def parse_manifest(data: object) -> tuple[IndexInfo, str, int]:
@@ -147,27 +87,6 @@ def parse_shard(data: object, prefix: str) -> tuple[tuple[str, tuple[Occurrence,
     return tuple(parsed)
 
 
-def _coverage(state: IndexState) -> dict[str, float | None]:
-    with_hash = state.counts()["occurrences"]
-    without_hash = state.counts()["candidate_without_sha256"]
-    total = with_hash + without_hash
-    return {
-        "candidate_files_with_sha256": None if not total else with_hash / total,
-        "candidate_bytes_with_sha256": None,
-    }
-
-
-def _occurrence_record(occurrence: Occurrence) -> list[str | int | bool | None]:
-    return [
-        occurrence.repo_id,
-        occurrence.path,
-        occurrence.revision,
-        occurrence.size,
-        occurrence.storage,
-        occurrence.gated,
-    ]
-
-
 def _parse_occurrence(value: object, schema_version: object) -> Occurrence:
     if not isinstance(value, list):
         raise IndexIntegrityError("Shard occurrence is invalid.")
@@ -192,50 +111,6 @@ def _parse_occurrence(value: object, schema_version: object) -> Occurrence:
         size=size,
         storage=_string(value[4], "Shard storage type is invalid."),
         gated=gated,
-    )
-
-
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
-
-
-def _records_for_size(state: IndexState) -> tuple[dict[str, list[list[Any]]], int]:
-    """Build the shallowest prefix partition that keeps every shard bounded."""
-    for prefix_length in range(MIN_PREFIX_HEX_CHARS, MAX_PREFIX_HEX_CHARS + 1):
-        records = _partition_records(state, prefix_length)
-        if (
-            max(
-                len(_canonical_json({"v": SCHEMA_VERSION, "p": prefix, "r": values}))
-                for prefix, values in records.items()
-            )
-            <= MAX_SHARD_BYTES
-        ):
-            return records, prefix_length
-    raise RuntimeError("Static index exceeds the maximum supported shard size.")
-
-
-def _partition_records(state: IndexState, prefix_length: int) -> dict[str, list[list[Any]]]:
-    """Partition verified occurrences by the requested hexadecimal digest prefix."""
-    records: dict[str, list[list[Any]]] = {
-        f"{value:0{prefix_length}x}": [] for value in range(16**prefix_length)
-    }
-    for digest_bytes, occurrences in state.iter_artifacts():
-        digest = digest_bytes.hex()
-        prefix = digest[:prefix_length]
-        records[prefix].append(
-            [digest[prefix_length:], [_occurrence_record(item) for item in occurrences]]
-        )
-    for values in records.values():
-        values.sort(key=lambda item: str(item[0]))
-    return records
-
-
-def _index_html() -> str:
-    return (
-        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Facehugger</title>'
-        "<body><h1>Facehugger</h1></body></html>\n"
     )
 
 

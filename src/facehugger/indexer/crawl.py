@@ -12,6 +12,7 @@ from huggingface_hub import HfApi
 
 from facehugger.errors import RepositoryUnavailableError
 from facehugger.filters import is_candidate_artifact, load_artifact_extensions
+from facehugger.indexer.compiler import compile_site
 from facehugger.indexer.crawl_reports import (
     write_full_crawl_report,
     write_full_crawl_status_badge,
@@ -20,7 +21,6 @@ from facehugger.indexer.hub import configure_hub_http, create_hub_api
 from facehugger.indexer.metadata_sources import ModelInfoMetadataSource
 from facehugger.indexer.rate_limit import RateController, RequestMetrics
 from facehugger.models import CatalogRepo, PendingRepo
-from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
 CATALOG_URL = "https://huggingface.co/api/models"

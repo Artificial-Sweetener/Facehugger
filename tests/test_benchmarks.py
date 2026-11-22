@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from facehugger.indexer.benchmarks import measure_local_lookup
+from facehugger.indexer.compiler import compile_site
 from facehugger.models import InspectedFile, InspectedRepo
-from facehugger.shard_format import compile_site
 from facehugger.state import IndexState
 
 
