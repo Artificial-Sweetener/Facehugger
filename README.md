@@ -55,6 +55,9 @@ eligible repositories inspected and remaining. The state badge updates when a
 batch starts, completes, or fails; the count badges update whenever a batch
 checkpoints verified state.
 
+Publication failures retain the completed inspection counts and verified state,
+while the workflow reports failure rather than publishing an incomplete index.
+
 ## Development
 
 The project requires Python 3.12 or later and uses [uv](https://docs.astral.sh/uv/)

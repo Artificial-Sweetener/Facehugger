@@ -143,11 +143,14 @@ jobs:
           echo "minutes=$effective_minutes" >> "$GITHUB_OUTPUT"
       - id: crawl
         name: Advance resumable full crawl
+        shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           INDEX_VERSION: full-${{ github.run_id }}
         run: |
+          set -euo pipefail
           uv run facehugger crawl --root . --version "$INDEX_VERSION" --time-limit-minutes "${{ steps.crawl_budget.outputs.minutes }}" | tee crawl-output.json
+          jq --exit-status '(.published | type == "boolean") and (.next_invocation_ready | type == "boolean")' crawl-output.json > /dev/null
           echo "published=$(jq -r '.published' crawl-output.json)" >> "$GITHUB_OUTPUT"
           echo "continue=$(jq -r '.next_invocation_ready' crawl-output.json)" >> "$GITHUB_OUTPUT"
       - name: Mark crawl as failed

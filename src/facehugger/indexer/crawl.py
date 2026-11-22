@@ -1,7 +1,7 @@
 """Resumable full-catalog crawling and staged static-index compilation."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
@@ -116,12 +116,6 @@ def run_full_crawl(
             inspections = _inspect_pending(state, api, extensions, deadline)
         catalog_complete = state.catalog_generation_complete()
         pending = state.pending_repository_count()
-        published = False
-        if catalog_complete and not catalog_stalled and pending == 0:
-            state.validate()
-            _compile_staged_site(state, root, version)
-            state.complete_catalog_generation()
-            published = True
         progress = CrawlProgress(
             generation=generation,
             catalog_pages=catalog_page_count,
@@ -132,9 +126,15 @@ def run_full_crawl(
             eligible_repositories=state.eligible_repository_count(),
             indexed_repositories=state.indexed_repository_count(),
             pending_repositories=pending,
-            published=published,
+            published=False,
         )
         write_full_crawl_report(root, progress, metrics)
+        if catalog_complete and not catalog_stalled and pending == 0:
+            state.validate()
+            _compile_staged_site(state, root, version)
+            state.complete_catalog_generation()
+            progress = replace(progress, published=True)
+            write_full_crawl_report(root, progress, metrics)
         write_full_crawl_status_badge(root, "idle")
         return progress
     finally:

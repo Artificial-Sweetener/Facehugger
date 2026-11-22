@@ -1,5 +1,6 @@
 """Resumable full-crawl catalog and incremental-state tests."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Lock
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 from pytest import MonkeyPatch
 
 from facehugger.indexer.crawl import (
@@ -18,6 +20,43 @@ from facehugger.indexer.crawl import (
 from facehugger.indexer.metadata_sources import InspectionMeasurement
 from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
 from facehugger.state import IndexState
+
+
+def test_compilation_failure_keeps_inspection_progress_report_current(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Publication failure reports completed inspections without losing verified records."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "artifacts.toml").write_text("[artifacts]\nextensions = ['.bin']\n")
+    (tmp_path / ".facehugger").mkdir()
+    state = IndexState(tmp_path / ".facehugger" / "full.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        state.record_catalog_repo(
+            CatalogRepo("owner/model", "1" * 40, None, 1, False, False, ("model.bin",)),
+            eligible=True,
+            generation=generation,
+        )
+        state.replace_repo(InspectedRepo("owner/model", "1" * 40, ()), ())
+        state.finish_catalog_generation(generation)
+    finally:
+        state.close()
+
+    def skip_configuration(*args: object) -> None:
+        """Avoid process-wide HTTP configuration for the offline fixture."""
+
+    def fail_compilation(*args: object, **kwargs: object) -> None:
+        """Represent an enforced publication boundary failure."""
+        raise RuntimeError("publication limit")
+
+    monkeypatch.setattr("facehugger.indexer.crawl.configure_hub_http", skip_configuration)
+    monkeypatch.setattr("facehugger.indexer.crawl.compile_site", fail_compilation)
+    with pytest.raises(RuntimeError, match="publication limit"):
+        run_full_crawl(root=tmp_path, token="test", version="failed-publication")
+    report = json.loads((tmp_path / "reports" / "full-crawl.json").read_text())
+    assert report["indexed_repositories"] == 1
+    assert report["pending_repositories"] == 0
+    assert report["published"] is False
 
 
 def test_full_crawl_publishes_after_a_gate_change_since_cataloging(

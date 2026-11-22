@@ -3,6 +3,17 @@
 from pathlib import Path
 
 
+def test_crawl_pipeline_propagates_failures_before_reading_outputs() -> None:
+    """A failing crawler cannot be masked by tee or yield empty success outputs."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "crawl.yml"
+    ).read_text(encoding="utf-8")
+    step = workflow.split("      - id: crawl\n", 1)[1].split("      - name:", 1)[0]
+    assert "shell: bash" in step
+    assert step.index("set -euo pipefail") < step.index("uv run facehugger crawl")
+    assert "jq --exit-status" in step
+
+
 def test_full_crawl_restores_verified_immutable_checkpoints() -> None:
     """A corrupt mutable state release cannot discard more than one retained crawl batch."""
     workflow = (
