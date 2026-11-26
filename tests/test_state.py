@@ -1,6 +1,7 @@
 """SQLite reverse-index replacement and duplicate tests."""
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -10,6 +11,43 @@ from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
 from facehugger.state import IndexState
 
 _DIGEST = bytes.fromhex("ab" * 32)
+
+
+def test_catalog_refresh_is_due_on_a_new_utc_day_even_with_pending_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Enumeration schedules the next pass independently of inspection or publication."""
+
+    class Clock(datetime):
+        current = datetime(2026, 10, 18, 22, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return cls.current
+
+    monkeypatch.setattr("facehugger.state.datetime", Clock)
+    state = IndexState(tmp_path / "state.sqlite")
+    try:
+        generation = state.start_catalog_generation()
+        state.record_catalog_repo(
+            CatalogRepo("owner/model", "1" * 40, None, 1, False, False, ("model.bin",)),
+            eligible=True,
+            generation=generation,
+        )
+        state.finish_catalog_generation(generation)
+        assert state.start_catalog_generation() == generation
+        assert state.pending_repository_count() == 1
+
+        Clock.current = datetime(2026, 10, 19, 3, tzinfo=UTC)
+        assert state.start_catalog_generation() == generation + 1
+        assert state.has_completed_catalog()
+        assert not state.catalog_generation_complete()
+        assert state.pending_repository_count() == 1
+
+        Clock.current = datetime(2026, 10, 20, 3, tzinfo=UTC)
+        assert state.start_catalog_generation() == generation + 1
+    finally:
+        state.close()
 
 
 @pytest.mark.parametrize("catalog_gated", [False, True])
@@ -36,10 +74,7 @@ def test_successful_inspection_reconciles_gate_changes_since_cataloging(
         assert state.pending_repository_count() == 0
         assert state.pending_repositories(1) == ()
         assert state.lookup(_DIGEST)[0].gated is not catalog_gated
-        state.complete_catalog_generation()
-
-        next_generation = state.start_catalog_generation()
-        state.record_catalog_repo(cataloged, eligible=True, generation=next_generation)
+        state.record_catalog_repo(cataloged, eligible=True, generation=generation)
         assert state.pending_repository_count() == 1
         assert state.pending_repositories(1)[0].gated is catalog_gated
     finally:
@@ -69,6 +104,8 @@ def test_state_returns_duplicate_occurrences_and_replaces_a_repo(tmp_path: Path)
         replacement = InspectedRepo("one/model", "3" * 40, ())
         state.replace_repo(replacement, replacement.files)
         assert [item.repo_id for item in state.lookup(_DIGEST)] == ["two/model"]
+        state.replace_repo(InspectedRepo("two/model", "4" * 40, ()), ())
+        assert state.counts()["unique_hashes"] == 0
         state.validate()
     finally:
         state.close()

@@ -11,11 +11,11 @@ import httpx
 import pytest
 from pytest import MonkeyPatch
 
-from facehugger.indexer.crawl import (
+from facehugger.indexer.crawl import run_full_crawl
+from facehugger.indexer.hub_catalog import (
     CATALOG_URL,
     advance_catalog,
     normalize_catalog_record,
-    run_full_crawl,
 )
 from facehugger.indexer.metadata_sources import InspectionMeasurement
 from facehugger.models import CatalogRepo, InspectedFile, InspectedRepo
@@ -103,6 +103,117 @@ def test_full_crawl_publishes_after_a_gate_change_since_cataloging(
     assert (tmp_path / "site-staging" / "api" / "v1" / "manifest.json").is_file()
 
 
+@pytest.mark.parametrize("split_refresh", [False, True])
+def test_legacy_checkpoint_refreshes_despite_failed_compilation(
+    monkeypatch: MonkeyPatch, tmp_path: Path, split_refresh: bool
+) -> None:
+    """New and changed repos join a restored, unpublished catalog without reindexing it."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "artifacts.toml").write_text("[artifacts]\nextensions = ['.bin']\n")
+    (tmp_path / ".facehugger").mkdir()
+    database = tmp_path / ".facehugger" / "full.sqlite"
+    original_digest = bytes.fromhex("ab" * 32)
+    state = IndexState(database)
+    try:
+        state.set_metadata("active_catalog_generation", "1")
+        state.set_metadata("catalog_generation_complete", "true")
+        for name in ("owner/unchanged", "owner/changed"):
+            state.record_catalog_repo(
+                CatalogRepo(name, "1" * 40, None, 1, False, False, ("model.bin",)),
+                eligible=True,
+                generation=1,
+            )
+            files = (InspectedFile("model.bin", 1, None, original_digest, None, "lfs"),)
+            state.replace_repo(InspectedRepo(name, "1" * 40, files), files)
+    finally:
+        state.close()
+
+    requested: list[tuple[str, str | None]] = []
+
+    class HubApi:
+        """Serve metadata only for the new and changed repositories."""
+
+        def model_info(self, repo_id: str, *, revision: str | None, **_: object) -> SimpleNamespace:
+            requested.append((repo_id, revision))
+            return SimpleNamespace(sha=revision, siblings=[], gated=False)
+
+    times = {"now": 0.0}
+    continuation = f"{CATALOG_URL}?cursor=next"
+
+    def catalog_response(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("cursor") is None:
+            assert request.url.params["sort"] == "createdAt"
+            items = (("new", "3"), ("changed", "2"), ("unchanged", "1"))
+            if split_refresh:
+                times["now"] = 41.0
+                return httpx.Response(
+                    200,
+                    json=[catalog_item(name, revision) for name, revision in items[:2]],
+                    headers={"Link": f'<{continuation}>; rel="next"'},
+                )
+        else:
+            assert str(request.url) == continuation
+            items = (("unchanged", "1"),)
+        return httpx.Response(200, json=[catalog_item(name, revision) for name, revision in items])
+
+    def catalog_item(name: str, revision: str) -> dict[str, object]:
+        return {
+            "id": f"owner/{name}",
+            "sha": revision * 40,
+            "siblings": [{"rfilename": "model.bin"}],
+        }
+
+    def fail_compilation(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("publication limit")
+
+    def skip_configuration(*_: object) -> None:
+        """Avoid process-wide configuration in the controlled offline fixture."""
+
+    def test_api(_: str) -> HubApi:
+        return HubApi()
+
+    def test_catalog_client(*_: object) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(catalog_response))
+
+    monkeypatch.setattr("facehugger.indexer.crawl.configure_hub_http", skip_configuration)
+    monkeypatch.setattr("facehugger.indexer.crawl.create_hub_api", test_api)
+    monkeypatch.setattr("facehugger.indexer.crawl.create_catalog_client", test_catalog_client)
+    monkeypatch.setattr("facehugger.indexer.crawl.compile_site", fail_compilation)
+    monkeypatch.setattr("facehugger.indexer.crawl.monotonic", lambda: times["now"])
+    monkeypatch.setattr("facehugger.indexer.hub_catalog.monotonic", lambda: times["now"])
+    if split_refresh:
+        progress = run_full_crawl(
+            root=tmp_path, token="test", version="partial-refresh", time_limit_minutes=1
+        )
+        assert progress.catalog_complete is False
+        assert progress.next_invocation_ready is True
+        assert progress.cataloged_repositories == 3
+        assert progress.inspections == 2
+        state = IndexState(database)
+        try:
+            assert [match.repo_id for match in state.lookup(original_digest)] == ["owner/unchanged"]
+            assert state.get_metadata("catalog_next_url") == continuation
+        finally:
+            state.close()
+
+    with pytest.raises(RuntimeError, match="publication limit"):
+        run_full_crawl(root=tmp_path, token="test", version="failed-publication")
+
+    report = json.loads((tmp_path / "reports" / "full-crawl.json").read_text())
+    assert report["generation"] == 2
+    assert report["catalog_pages"] == 1
+    assert report["cataloged_repositories"] == 3
+    assert report["inspections"] == (0 if split_refresh else 2)
+    assert report["pending_repositories"] == 0
+    assert report["published"] is False
+    assert sorted(requested) == [("owner/changed", "2" * 40), ("owner/new", "3" * 40)]
+    state = IndexState(database)
+    try:
+        assert [match.repo_id for match in state.lookup(original_digest)] == ["owner/unchanged"]
+    finally:
+        state.close()
+
+
 def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
@@ -142,10 +253,12 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
     def catalog_item(_: object) -> CatalogRepo:
         return next(values)
 
-    monkeypatch.setattr("facehugger.indexer.crawl.normalize_catalog_record", catalog_item)
+    monkeypatch.setattr("facehugger.indexer.hub_catalog.normalize_catalog_record", catalog_item)
     try:
         monotonic_values = iter((0.0, 1.0))
-        monkeypatch.setattr("facehugger.indexer.crawl.monotonic", lambda: next(monotonic_values))
+        monkeypatch.setattr(
+            "facehugger.indexer.hub_catalog.monotonic", lambda: next(monotonic_values)
+        )
         assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, 1.0) == (1, False)
         assert (
             state.get_metadata("catalog_next_url")
@@ -154,7 +267,7 @@ def test_catalog_resumes_from_the_hub_continuation_then_reconciles_removals(
         assert state.catalog_generation_complete() is False
         assert state.lookup(bytes.fromhex("ab" * 32))
 
-        monkeypatch.setattr("facehugger.indexer.crawl.monotonic", lambda: 0.0)
+        monkeypatch.setattr("facehugger.indexer.hub_catalog.monotonic", lambda: 0.0)
         assert advance_catalog(state, FakeCatalogClient(), (".bin",), generation, float("inf")) == (
             1,
             False,
@@ -206,7 +319,7 @@ def test_catalog_timeout_leaves_a_resumable_continuation(
         del seconds
 
     try:
-        monkeypatch.setattr("facehugger.indexer.crawl.sleep", no_sleep)
+        monkeypatch.setattr("facehugger.indexer.hub_catalog.sleep", no_sleep)
         generation = state.start_catalog_generation()
         assert advance_catalog(
             state, TimeoutCatalogClient(), (".bin",), generation, float("inf")

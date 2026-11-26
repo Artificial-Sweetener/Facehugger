@@ -93,12 +93,16 @@ class IndexState:
 
     def set_metadata(self, key: str, value: str) -> None:
         """Store one small state metadata value."""
+        self._write_metadata(key, value)
+        self.connection.commit()
+
+    def _write_metadata(self, key: str, value: str) -> None:
+        """Write one metadata value in the caller's transaction."""
         self.connection.execute(
             "INSERT INTO metadata(key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
-        self.connection.commit()
 
     def get_metadata(self, key: str) -> str | None:
         """Return a metadata value, if present."""
@@ -106,36 +110,68 @@ class IndexState:
         return None if row is None else str(row["value"])
 
     def start_catalog_generation(self) -> int:
-        """Return the active catalog generation, creating one when needed."""
+        """Resume a partial pass or start a refresh when the last pass is old."""
         active = self.get_metadata("active_catalog_generation")
-        if active is not None:
-            return int(active)
         completed = self.get_metadata("completed_catalog_generation")
+        now = datetime.now(UTC)
+        finished_at = self.get_metadata("catalog_completed_at")
+        if active is not None:
+            if not self.catalog_generation_complete():
+                return int(active)
+            if finished_at is not None and now.date() <= datetime.fromisoformat(finished_at).date():
+                return int(active)
+            # Older checkpoints only recorded the active pass as fully enumerated.
+            completed = active
         generation = 1 if completed is None else int(completed) + 1
-        self.set_metadata("active_catalog_generation", str(generation))
-        self.set_metadata("catalog_generation_complete", "false")
+        with self.transaction():
+            if completed is not None:
+                self._write_metadata("completed_catalog_generation", completed)
+            self._write_metadata("active_catalog_generation", str(generation))
+            self._write_metadata("catalog_generation_complete", "false")
+            self._write_metadata("catalog_started_at", now.isoformat())
         return generation
 
     def catalog_generation_complete(self) -> bool:
         """Return whether the active catalog generation was fully enumerated."""
         return self.get_metadata("catalog_generation_complete") == "true"
 
-    def record_catalog_repositories(
-        self, observations: tuple[tuple[CatalogRepo, bool], ...], *, generation: int
+    def has_completed_catalog(self) -> bool:
+        """Return whether a full catalog pass is available as an inspection baseline."""
+        return self.catalog_generation_complete() or (
+            self.get_metadata("completed_catalog_generation") is not None
+        )
+
+    def catalog_started_at(self) -> datetime | None:
+        """Return the start time of the active pass if it was recorded."""
+        value = self.get_metadata("catalog_started_at")
+        return None if value is None else datetime.fromisoformat(value)
+
+    def cataloged_repository_count(self) -> int:
+        """Count known catalog rows, including prior observations during a refresh."""
+        return int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM repos WHERE catalog_generation > 0"
+            ).fetchone()[0]
+        )
+
+    def record_catalog_page(
+        self,
+        observations: tuple[tuple[CatalogRepo, bool], ...],
+        *,
+        generation: int,
+        next_url: str | None,
     ) -> None:
-        """Persist a bounded catalog batch without replacing prior verified occurrences."""
-        if not observations:
-            return
+        """Persist an entire page and its continuation in a single transaction."""
         with self.transaction():
             for repo, eligible in observations:
                 self._record_catalog_repo(repo, eligible=eligible, generation=generation)
-            self._remove_orphan_artifacts()
+            if next_url is not None:
+                self._write_metadata("catalog_next_url", next_url)
 
     def record_catalog_repo(self, repo: CatalogRepo, *, eligible: bool, generation: int) -> None:
         """Persist one catalog observation without replacing prior verified occurrences."""
         with self.transaction():
             self._record_catalog_repo(repo, eligible=eligible, generation=generation)
-            self._remove_orphan_artifacts()
 
     def finish_catalog_generation(self, generation: int) -> None:
         """Reconcile removals after a complete catalog enumeration."""
@@ -143,13 +179,18 @@ class IndexState:
         if active is None or generation != int(active):
             raise ValueError("Catalog generation is not active.")
         with self.transaction():
-            self.connection.execute(
+            removed = self.connection.execute(
                 "DELETE FROM repos WHERE catalog_generation != ?", (generation,)
-            )
-            self._remove_orphan_artifacts()
-        self.set_metadata("catalog_generation_complete", "true")
-        self.connection.execute("DELETE FROM metadata WHERE key = 'catalog_next_url'")
-        self.connection.commit()
+            ).rowcount
+            if removed:
+                self.connection.execute(
+                    "DELETE FROM artifacts WHERE id NOT IN "
+                    "(SELECT DISTINCT artifact_id FROM occurrences)"
+                )
+            self._write_metadata("catalog_generation_complete", "true")
+            self._write_metadata("completed_catalog_generation", str(generation))
+            self._write_metadata("catalog_completed_at", datetime.now(UTC).isoformat())
+            self.connection.execute("DELETE FROM metadata WHERE key = 'catalog_next_url'")
 
     def pending_repositories(self, limit: int) -> tuple[PendingRepo, ...]:
         """Return a bounded deterministic batch whose indexed state is stale or absent."""
@@ -226,19 +267,6 @@ class IndexState:
                 (revision, int(gated), now, repo_id),
             )
             self._remove_repo_records(repo_id)
-            self._remove_orphan_artifacts()
-
-    def complete_catalog_generation(self) -> None:
-        """Mark a fully inspected active generation as the current catalog snapshot."""
-        if not self.catalog_generation_complete() or self.pending_repository_count():
-            raise RuntimeError("Catalog generation cannot complete while work remains.")
-        active = self.get_metadata("active_catalog_generation")
-        if active is None:
-            raise RuntimeError("No catalog generation is active.")
-        self.set_metadata("completed_catalog_generation", active)
-        self.connection.execute("DELETE FROM metadata WHERE key = 'active_catalog_generation'")
-        self.connection.execute("DELETE FROM metadata WHERE key = 'catalog_generation_complete'")
-        self.connection.commit()
 
     def replace_repo(
         self, inspected: InspectedRepo, candidate_files: tuple[InspectedFile, ...]
@@ -260,6 +288,7 @@ class IndexState:
             if repo_row is None:
                 raise RuntimeError("Repository row was not persisted.")
             repo_key = int(repo_row["id"])
+            previous_artifacts = self._repo_artifact_ids(repo_key)
             self.connection.execute("DELETE FROM occurrences WHERE repo_id_fk = ?", (repo_key,))
             self.connection.execute(
                 "DELETE FROM candidate_files_without_sha256 WHERE repo_id_fk = ?", (repo_key,)
@@ -308,10 +337,7 @@ class IndexState:
                         now,
                     ),
                 )
-            self.connection.execute(
-                "DELETE FROM artifacts WHERE id NOT IN "
-                "(SELECT DISTINCT artifact_id FROM occurrences)"
-            )
+            self._remove_orphan_artifacts(previous_artifacts)
 
     def lookup(self, digest: bytes) -> tuple[Occurrence, ...]:
         """Return all current occurrences for one binary SHA-256 digest."""
@@ -443,13 +469,26 @@ class IndexState:
         if row is None:
             return
         repo_key = int(row["id"])
+        previous_artifacts = self._repo_artifact_ids(repo_key)
         self.connection.execute("DELETE FROM occurrences WHERE repo_id_fk = ?", (repo_key,))
         self.connection.execute(
             "DELETE FROM candidate_files_without_sha256 WHERE repo_id_fk = ?", (repo_key,)
         )
+        self._remove_orphan_artifacts(previous_artifacts)
 
-    def _remove_orphan_artifacts(self) -> None:
-        """Remove digest rows no longer referenced by any current repository occurrence."""
-        self.connection.execute(
-            "DELETE FROM artifacts WHERE id NOT IN (SELECT DISTINCT artifact_id FROM occurrences)"
+    def _repo_artifact_ids(self, repo_key: int) -> tuple[tuple[int], ...]:
+        """Collect only the digest rows that a repository update can orphan."""
+        return tuple(
+            (int(row[0]),)
+            for row in self.connection.execute(
+                "SELECT DISTINCT artifact_id FROM occurrences WHERE repo_id_fk = ?", (repo_key,)
+            )
+        )
+
+    def _remove_orphan_artifacts(self, candidates: tuple[tuple[int], ...]) -> None:
+        """Delete affected digest rows only when no current occurrence still references them."""
+        self.connection.executemany(
+            "DELETE FROM artifacts WHERE id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM occurrences WHERE artifact_id = artifacts.id)",
+            candidates,
         )
